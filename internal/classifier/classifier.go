@@ -1,5 +1,10 @@
 package classifier
 
+import (
+	"fmt"
+	"strconv"
+)
+
 // ExposeMethod determines how a container port is exposed to the host.
 type ExposeMethod string
 
@@ -58,25 +63,16 @@ func Classify(containerPort uint16, labelOverride string) ExposeMethod {
 	return Port
 }
 
+// ClassifyFromLabels classifies a port using Docker labels for override lookup.
+func ClassifyFromLabels(containerPort uint16, labels map[string]string) ExposeMethod {
+	return Classify(containerPort, labels[fmt.Sprintf("zerobased.%d", containerPort)])
+}
+
 // SocketFilename returns the conventional socket filename for a service/port.
 // For Postgres, uses the .s.PGSQL.5432 convention.
 func SocketFilename(service string, containerPort uint16) string {
 	if containerPort == 5432 {
 		return ".s.PGSQL.5432"
 	}
-	return service + "-" + uitoa(containerPort) + ".sock"
-}
-
-func uitoa(n uint16) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [5]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return service + "-" + strconv.FormatUint(uint64(containerPort), 10) + ".sock"
 }

@@ -48,8 +48,8 @@ func (c *Client) Close() error {
 	return c.cli.Close()
 }
 
-// Inner returns the underlying Docker SDK client for direct use.
-func (c *Client) Inner() *client.Client {
+// RawClient returns the underlying Docker SDK client.
+func (c *Client) RawClient() *client.Client {
 	return c.cli
 }
 
@@ -104,6 +104,7 @@ func (c *Client) Inspect(ctx context.Context, containerID string) (*ContainerInf
 }
 
 // ListRunning returns ContainerInfo for all currently running containers.
+// Extracts data directly from ContainerList response (no per-container Inspect).
 func (c *Client) ListRunning(ctx context.Context) ([]*ContainerInfo, error) {
 	containers, err := c.cli.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
@@ -112,13 +113,37 @@ func (c *Client) ListRunning(ctx context.Context) ([]*ContainerInfo, error) {
 
 	var infos []*ContainerInfo
 	for _, ctr := range containers {
-		info, err := c.Inspect(ctx, ctr.ID)
-		if err != nil {
-			continue // skip containers that disappear between list and inspect
-		}
-		if info.Project == "" {
+		project := ctr.Labels["com.docker.compose.project"]
+		if project == "" {
 			continue // skip non-compose containers
 		}
+
+		info := &ContainerInfo{
+			ID:      ctr.ID,
+			Name:    strings.TrimPrefix(ctr.Names[0], "/"),
+			Project: project,
+			Service: ctr.Labels["com.docker.compose.service"],
+			Labels:  ctr.Labels,
+		}
+
+		// Get IP from network settings
+		for _, net := range ctr.NetworkSettings.Networks {
+			if net.IPAddress != "" {
+				info.IP = net.IPAddress
+				break
+			}
+		}
+
+		// Extract exposed ports
+		for _, p := range ctr.Ports {
+			if p.PrivatePort > 0 {
+				info.Ports = append(info.Ports, PortBinding{
+					ContainerPort: p.PrivatePort,
+					Proto:         p.Type,
+				})
+			}
+		}
+
 		infos = append(infos, info)
 	}
 	return infos, nil

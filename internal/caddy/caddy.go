@@ -18,7 +18,7 @@ import (
 const (
 	containerName = "zerobased-caddy"
 	caddyImage    = "caddy:2-alpine"
-	adminAddr     = "http://localhost:2019"
+	AdminAddr     = "http://localhost:2019"
 )
 
 // Manager manages the Caddy container and its admin API for route registration.
@@ -27,12 +27,17 @@ type Manager struct {
 	http   *http.Client
 }
 
-// New creates a Caddy manager using the provided Docker client.
+// New creates a Caddy manager. Accepts the raw Docker SDK client.
 func New(docker *client.Client) *Manager {
 	return &Manager{
 		docker: docker,
 		http:   &http.Client{Timeout: 5 * time.Second},
 	}
+}
+
+// NewFromWrapper creates a Caddy manager from a zerobased docker.Client wrapper.
+func NewFromWrapper(dc interface{ RawClient() *client.Client }) *Manager {
+	return New(dc.RawClient())
 }
 
 // Start ensures the Caddy container is running. Creates it if it doesn't exist.
@@ -81,14 +86,14 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("start caddy: %w", err)
 	}
 
-	// Wait for admin API to be ready
+	// Wait for admin API to be ready (check first, sleep after)
 	for i := 0; i < 30; i++ {
-		time.Sleep(200 * time.Millisecond)
-		r, err := m.http.Get(adminAddr + "/config/")
+		r, err := m.http.Get(AdminAddr + "/config/")
 		if err == nil {
 			r.Body.Close()
 			return nil
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	return fmt.Errorf("caddy admin API not ready after 6s")
@@ -147,7 +152,7 @@ func (m *Manager) AddTCPRoute(routeID string, listenPort uint16, upstream string
 
 // RemoveRoute removes a route by its ID.
 func (m *Manager) RemoveRoute(routeID string) error {
-	req, err := http.NewRequest("DELETE", adminAddr+"/id/"+routeID, nil)
+	req, err := http.NewRequest("DELETE", AdminAddr+"/id/"+routeID, nil)
 	if err != nil {
 		return err
 	}
@@ -166,7 +171,7 @@ func (m *Manager) postRoute(route map[string]any) error {
 	}
 
 	resp, err := m.http.Post(
-		adminAddr+"/config/apps/http/servers/zerobased/routes",
+		AdminAddr+"/config/apps/http/servers/zerobased/routes",
 		"application/json",
 		bytes.NewReader(body),
 	)
@@ -202,7 +207,7 @@ func (m *Manager) EnsureHTTPServer() error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", adminAddr+"/load", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", AdminAddr+"/load", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

@@ -6,7 +6,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 )
 
 // bridge holds a running Unix→TCP bridge.
@@ -76,7 +78,7 @@ func (m *Manager) Bridge(socketDir, filename, target string) (string, error) {
 
 // proxy copies data bidirectionally between a Unix socket connection and a TCP target.
 func proxy(src net.Conn, target string) {
-	dst, err := net.Dial("tcp", target)
+	dst, err := net.DialTimeout("tcp", target, 5*time.Second)
 	if err != nil {
 		src.Close()
 		return
@@ -130,7 +132,7 @@ func (m *Manager) RemoveByPrefix(prefix string) {
 	m.mu.Lock()
 	var toRemove []string
 	for sockPath := range m.bridges {
-		if len(sockPath) >= len(prefix) && sockPath[:len(prefix)] == prefix {
+		if strings.HasPrefix(sockPath, prefix) {
 			toRemove = append(toRemove, sockPath)
 		}
 	}

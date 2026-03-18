@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
 	"strings"
@@ -107,12 +108,9 @@ func cmdRun() {
 	name := ""
 	cmdArgs := args
 	if len(args) > 1 && !strings.Contains(args[0], "/") {
-		if _, err := os.Stat(args[0]); os.IsNotExist(err) {
-			// Check if it's in PATH
-			if _, err := lookPath(args[0]); err != nil {
-				name = args[0]
-				cmdArgs = args[1:]
-			}
+		if _, err := exec.LookPath(args[0]); err != nil {
+			name = args[0]
+			cmdArgs = args[1:]
 		}
 	}
 
@@ -121,14 +119,18 @@ func cmdRun() {
 	}
 }
 
-func lookPath(name string) (string, error) {
-	for _, dir := range strings.Split(os.Getenv("PATH"), ":") {
-		path := dir + "/" + name
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
+// listContainers creates a docker client, lists running compose containers, and returns a cleanup func.
+func listContainers() ([]*docker.ContainerInfo, func(), error) {
+	dc, err := docker.New()
+	if err != nil {
+		return nil, nil, err
 	}
-	return "", fmt.Errorf("not found")
+	containers, err := dc.ListRunning(context.Background())
+	if err != nil {
+		dc.Close()
+		return nil, nil, err
+	}
+	return containers, func() { dc.Close() }, nil
 }
 
 func cmdEnv() {
@@ -138,16 +140,11 @@ func cmdEnv() {
 	}
 
 	baseDir := daemon.DefaultBaseDir()
-	dc, err := docker.New()
+	containers, cleanup, err := listContainers()
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
-	defer dc.Close()
-
-	containers, err := dc.ListRunning(context.Background())
-	if err != nil {
-		log.Fatalf("list: %v", err)
-	}
+	defer cleanup()
 
 	var endpoints []env.ServiceEndpoint
 	for _, c := range containers {
@@ -158,8 +155,7 @@ func cmdEnv() {
 			if pb.Proto != "tcp" {
 				continue
 			}
-			labelKey := fmt.Sprintf("zerobased.%d", pb.ContainerPort)
-			method := classifier.Classify(pb.ContainerPort, c.Labels[labelKey])
+			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
 			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
 			endpoints = append(endpoints, ep)
 		}
@@ -178,17 +174,12 @@ func cmdEnv() {
 }
 
 func cmdPs() {
-	dc, err := docker.New()
+	baseDir := daemon.DefaultBaseDir()
+	containers, cleanup, err := listContainers()
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
-	defer dc.Close()
-
-	baseDir := daemon.DefaultBaseDir()
-	containers, err := dc.ListRunning(context.Background())
-	if err != nil {
-		log.Fatalf("list: %v", err)
-	}
+	defer cleanup()
 
 	if len(containers) == 0 {
 		fmt.Println("no compose services running")
@@ -214,8 +205,7 @@ func cmdPs() {
 				if pb.Proto != "tcp" {
 					continue
 				}
-				labelKey := fmt.Sprintf("zerobased.%d", pb.ContainerPort)
-				method := classifier.Classify(pb.ContainerPort, c.Labels[labelKey])
+				method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
 				ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
 				fmt.Printf("  %-15s %-6s %d → %s\n", c.Service, method, pb.ContainerPort, ep.ConnString)
 			}
@@ -230,17 +220,12 @@ func cmdGet() {
 	}
 
 	target := os.Args[2]
-	dc, err := docker.New()
+	baseDir := daemon.DefaultBaseDir()
+	containers, cleanup, err := listContainers()
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
-	defer dc.Close()
-
-	baseDir := daemon.DefaultBaseDir()
-	containers, err := dc.ListRunning(context.Background())
-	if err != nil {
-		log.Fatalf("list: %v", err)
-	}
+	defer cleanup()
 
 	for _, c := range containers {
 		if c.Service != target && c.Name != target {
@@ -250,8 +235,7 @@ func cmdGet() {
 			if pb.Proto != "tcp" {
 				continue
 			}
-			labelKey := fmt.Sprintf("zerobased.%d", pb.ContainerPort)
-			method := classifier.Classify(pb.ContainerPort, c.Labels[labelKey])
+			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
 			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
 			fmt.Println(ep.ConnString)
 		}

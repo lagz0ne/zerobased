@@ -46,7 +46,7 @@ func New(baseDir string) (*Daemon, error) {
 		return nil, err
 	}
 
-	cm := caddy.New(dc.Inner())
+	cm := caddy.NewFromWrapper(dc)
 	sm := socat.New(baseDir)
 
 	return &Daemon{
@@ -156,9 +156,7 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 			continue
 		}
 
-		labelKey := fmt.Sprintf("zerobased.%d", pb.ContainerPort)
-		labelOverride := info.Labels[labelKey]
-		method := classifier.Classify(pb.ContainerPort, labelOverride)
+		method := classifier.ClassifyFromLabels(pb.ContainerPort, info.Labels)
 
 		entry := ServiceEntry{
 			ContainerID:   info.ID,
