@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lagz0ne/zerobased/internal/classifier"
+	"github.com/lagz0ne/zerobased/internal/docker"
 	"github.com/lagz0ne/zerobased/internal/ports"
 )
 
@@ -17,6 +18,12 @@ type ServiceEndpoint struct {
 	ContainerPort uint16
 	Method        classifier.ExposeMethod
 	ConnString    string // the actual connection string/path
+
+	// Intermediate values (populated by ForPort, used by TemplateVars)
+	Socket    string // full socket path (socket types only)
+	SocketDir string // socket directory (socket types only)
+	Host      string // hostname or "localhost"
+	HostPort  uint16 // resolved host port (deterministic hash or container port)
 }
 
 // ForPort generates the connection string for a single port exposure.
@@ -30,38 +37,62 @@ func ForPort(baseDir, project, service string, containerPort uint16, method clas
 
 	switch method {
 	case classifier.Socket:
-		sockDir := filepath.Join(baseDir, project)
+		ep.SocketDir = filepath.Join(baseDir, project)
 		filename := classifier.SocketFilename(service, containerPort)
-		sockPath := filepath.Join(sockDir, filename)
+		ep.Socket = filepath.Join(ep.SocketDir, filename)
 
 		switch containerPort {
 		case 5432:
-			// Postgres uses directory, not file path in connection string
-			ep.ConnString = fmt.Sprintf("postgresql://postgres@/%s?host=%s", "postgres", sockDir)
+			ep.ConnString = fmt.Sprintf("postgresql://postgres@/%s?host=%s", "postgres", ep.SocketDir)
 		case 3306:
-			ep.ConnString = fmt.Sprintf("mysql://root@unix(%s)/", sockPath)
+			ep.ConnString = fmt.Sprintf("mysql://root@unix(%s)/", ep.Socket)
 		case 6379:
-			ep.ConnString = fmt.Sprintf("redis+unix://%s", sockPath)
+			ep.ConnString = fmt.Sprintf("redis+unix://%s", ep.Socket)
 		case 27017:
-			ep.ConnString = fmt.Sprintf("mongodb://localhost/%s?socketPath=%s", "admin", sockPath)
+			ep.ConnString = fmt.Sprintf("mongodb://localhost/%s?socketPath=%s", "admin", ep.Socket)
 		default:
-			ep.ConnString = fmt.Sprintf("unix://%s", sockPath)
+			ep.ConnString = fmt.Sprintf("unix://%s", ep.Socket)
 		}
 
 	case classifier.HTTP:
-		hostname := Hostname(project, service, containerPort)
-		ep.ConnString = fmt.Sprintf("http://%s", hostname)
+		ep.Host = Hostname(project, service, containerPort)
+		ep.HostPort = containerPort
+		ep.ConnString = fmt.Sprintf("http://%s", ep.Host)
 
 	case classifier.Port:
-		p := ports.DeterministicPort(project, service, containerPort)
-		ep.ConnString = fmt.Sprintf("localhost:%d", p)
+		ep.HostPort = ports.DeterministicPort(project, service, containerPort)
+		ep.Host = "localhost"
+		ep.ConnString = fmt.Sprintf("localhost:%d", ep.HostPort)
 	}
 
 	return ep
 }
 
+// EndpointsFromContainers resolves all endpoints from a list of containers.
+// If project is non-empty, only that project's containers are included.
+func EndpointsFromContainers(baseDir string, containers []*docker.ContainerInfo, project string) []ServiceEndpoint {
+	var endpoints []ServiceEndpoint
+	for _, c := range containers {
+		if project != "" && c.Project != project {
+			continue
+		}
+		for _, pb := range c.Ports {
+			if pb.Proto != "tcp" {
+				continue
+			}
+			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
+			if method == classifier.Internal {
+				continue
+			}
+			endpoints = append(endpoints, ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method))
+		}
+	}
+	return endpoints
+}
+
 // TemplateVars returns all discoverable variables for an endpoint.
-func TemplateVars(baseDir string, ep ServiceEndpoint) map[string]string {
+// Reads from pre-computed fields — no re-derivation.
+func TemplateVars(ep ServiceEndpoint) map[string]string {
 	vars := map[string]string{
 		"project":        ep.Project,
 		"service":        ep.Service,
@@ -70,21 +101,18 @@ func TemplateVars(baseDir string, ep ServiceEndpoint) map[string]string {
 		"conn":           ep.ConnString,
 	}
 
-	switch ep.Method {
-	case classifier.Socket:
-		sockDir := filepath.Join(baseDir, ep.Project)
-		filename := classifier.SocketFilename(ep.Service, ep.ContainerPort)
-		vars["socket"] = filepath.Join(sockDir, filename)
-		vars["socket_dir"] = sockDir
-	case classifier.HTTP:
-		hostname := Hostname(ep.Project, ep.Service, ep.ContainerPort)
-		vars["host"] = hostname
-		vars["url"] = "http://" + hostname
-		vars["port"] = strconv.FormatUint(uint64(ep.ContainerPort), 10)
-	case classifier.Port:
-		p := ports.DeterministicPort(ep.Project, ep.Service, ep.ContainerPort)
-		vars["host"] = "localhost"
-		vars["port"] = strconv.FormatUint(uint64(p), 10)
+	if ep.Socket != "" {
+		vars["socket"] = ep.Socket
+		vars["socket_dir"] = ep.SocketDir
+	}
+	if ep.Host != "" {
+		vars["host"] = ep.Host
+	}
+	if ep.HostPort > 0 {
+		vars["port"] = strconv.FormatUint(uint64(ep.HostPort), 10)
+	}
+	if ep.ConnString != "" {
+		vars["url"] = ep.ConnString
 	}
 
 	return vars

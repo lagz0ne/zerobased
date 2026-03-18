@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lagz0ne/zerobased/internal/classifier"
 	"github.com/lagz0ne/zerobased/internal/daemon"
 	"github.com/lagz0ne/zerobased/internal/docker"
 	"github.com/lagz0ne/zerobased/internal/env"
@@ -114,13 +113,18 @@ Shell eval:
   eval "$(zerobased env --export acountee)"`)
 }
 
+var cachedZBDir string
+
 func zerobasedDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".zerobased")
+	if cachedZBDir == "" {
+		home, _ := os.UserHomeDir()
+		cachedZBDir = filepath.Join(home, ".zerobased")
+	}
+	return cachedZBDir
 }
 
-func pidFile() string  { return filepath.Join(zerobasedDir(), "daemon.pid") }
-func logFile() string  { return filepath.Join(zerobasedDir(), "daemon.log") }
+func pidFile() string { return filepath.Join(zerobasedDir(), "daemon.pid") }
+func logFile() string { return filepath.Join(zerobasedDir(), "daemon.log") }
 
 func cmdStart() {
 	detached := false
@@ -323,30 +327,13 @@ func cmdEnv() {
 		}
 	}
 
-	baseDir := daemon.DefaultBaseDir()
 	containers, cleanup, err := listContainers()
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
 	defer cleanup()
 
-	var endpoints []env.ServiceEndpoint
-	for _, c := range containers {
-		if project != "" && c.Project != project {
-			continue
-		}
-		for _, pb := range c.Ports {
-			if pb.Proto != "tcp" {
-				continue
-			}
-			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
-			if method == classifier.Internal {
-				continue
-			}
-			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
-			endpoints = append(endpoints, ep)
-		}
-	}
+	endpoints := env.EndpointsFromContainers(daemon.DefaultBaseDir(), containers, project)
 
 	if len(endpoints) == 0 {
 		if project != "" {
@@ -365,43 +352,34 @@ func cmdEnv() {
 }
 
 func cmdPs() {
-	baseDir := daemon.DefaultBaseDir()
 	containers, cleanup, err := listContainers()
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
 	defer cleanup()
 
-	if len(containers) == 0 {
+	endpoints := env.EndpointsFromContainers(daemon.DefaultBaseDir(), containers, "")
+	if len(endpoints) == 0 {
 		fmt.Println("no compose services running")
 		return
 	}
 
-	projects := make(map[string][]*docker.ContainerInfo)
-	for _, c := range containers {
-		projects[c.Project] = append(projects[c.Project], c)
+	// Group by project
+	grouped := make(map[string][]env.ServiceEndpoint)
+	for _, ep := range endpoints {
+		grouped[ep.Project] = append(grouped[ep.Project], ep)
 	}
 
-	projectNames := make([]string, 0, len(projects))
-	for p := range projects {
+	projectNames := make([]string, 0, len(grouped))
+	for p := range grouped {
 		projectNames = append(projectNames, p)
 	}
 	sort.Strings(projectNames)
 
 	for _, proj := range projectNames {
 		fmt.Printf("\n%s:\n", proj)
-		for _, c := range projects[proj] {
-			for _, pb := range c.Ports {
-				if pb.Proto != "tcp" {
-					continue
-				}
-				method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
-				if method == classifier.Internal {
-					continue
-				}
-				ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
-				fmt.Printf("  %-15s %-6s %d → %s\n", c.Service, method, pb.ContainerPort, ep.ConnString)
-			}
+		for _, ep := range grouped[proj] {
+			fmt.Printf("  %-15s %-6s %d → %s\n", ep.Service, ep.Method, ep.ContainerPort, ep.ConnString)
 		}
 	}
 }
@@ -440,41 +418,32 @@ func cmdGet() {
 		os.Exit(1)
 	}
 
-	baseDir := daemon.DefaultBaseDir()
 	containers, cleanup, err := listContainers()
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
 	defer cleanup()
 
-	for _, c := range containers {
-		if c.Service != target && c.Name != target {
+	endpoints := env.EndpointsFromContainers(daemon.DefaultBaseDir(), containers, "")
+	found := false
+	for _, ep := range endpoints {
+		if ep.Service != target {
 			continue
 		}
-		for _, pb := range c.Ports {
-			if pb.Proto != "tcp" {
-				continue
+		found = true
+		if tmpl != "" {
+			vars := env.TemplateVars(ep)
+			for k, v := range userVars {
+				vars[k] = v
 			}
-			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
-			if method == classifier.Internal {
-				continue
-			}
-			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
-
-			if tmpl != "" {
-				vars := env.TemplateVars(baseDir, ep)
-				// Merge user vars (override discovered ones)
-				for k, v := range userVars {
-					vars[k] = v
-				}
-				fmt.Println(env.RenderTemplate(tmpl, vars))
-			} else {
-				fmt.Println(ep.ConnString)
-			}
+			fmt.Println(env.RenderTemplate(tmpl, vars))
+		} else {
+			fmt.Println(ep.ConnString)
 		}
-		return
 	}
 
-	fmt.Fprintf(os.Stderr, "service %q not found\n", target)
-	os.Exit(1)
+	if !found {
+		fmt.Fprintf(os.Stderr, "service %q not found\n", target)
+		os.Exit(1)
+	}
 }

@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/lagz0ne/zerobased/internal/caddy"
-	"github.com/lagz0ne/zerobased/internal/classifier"
 	"github.com/lagz0ne/zerobased/internal/daemon"
 	"github.com/lagz0ne/zerobased/internal/docker"
 	"github.com/lagz0ne/zerobased/internal/env"
@@ -64,10 +64,11 @@ func Run(opts Options) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), zbEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	// Only set cmd.Env if we have vars to inject (nil = inherit parent env)
 	if len(zbEnv) > 0 {
+		cmd.Env = append(os.Environ(), zbEnv...)
 		log.Printf("injected %d env vars for project %q", len(zbEnv), name)
 	}
 
@@ -95,42 +96,29 @@ func Run(opts Options) error {
 	case <-done:
 	}
 
+	signal.Stop(sigs)
 	deregisterRoute(routeID)
 	return nil
 }
 
 // resolveProjectEnv queries Docker for compose services matching the project name
-// and returns ZB_<SERVICE>_<PORT>=<conn_string> env vars.
+// and returns PREFIX_<SERVICE>_<PORT>=<conn_string> env vars.
 func resolveProjectEnv(project, dockerHost, prefix string) []string {
 	dc, err := docker.NewWithHost(dockerHost)
 	if err != nil {
+		log.Printf("warning: docker unavailable for env injection: %v", err)
 		return nil
 	}
 	defer dc.Close()
 
 	containers, err := dc.ListRunning(context.Background())
 	if err != nil {
+		log.Printf("warning: failed to list containers for env injection: %v", err)
 		return nil
 	}
 
 	baseDir := daemon.DefaultBaseDir()
-	var endpoints []env.ServiceEndpoint
-	for _, c := range containers {
-		if c.Project != project {
-			continue
-		}
-		for _, pb := range c.Ports {
-			if pb.Proto != "tcp" {
-				continue
-			}
-			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
-			if method == classifier.Internal {
-				continue
-			}
-			endpoints = append(endpoints, env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method))
-		}
-	}
-
+	endpoints := env.EndpointsFromContainers(baseDir, containers, project)
 	return env.AsEnvVars(prefix, endpoints)
 }
 
@@ -158,7 +146,7 @@ func registerRoute(routeID, hostname, upstream string) error {
 	resp, err := httpClient.Post(
 		caddy.AdminAddr+"/config/apps/http/servers/zerobased/routes",
 		"application/json",
-		strings.NewReader(string(body)),
+		bytes.NewReader(body),
 	)
 	if err != nil {
 		return err
@@ -175,21 +163,24 @@ func deregisterRoute(routeID string) {
 	if err != nil {
 		return
 	}
-	if resp, err := httpClient.Do(req); err == nil {
-		resp.Body.Close()
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("warning: failed to deregister route %s: %v", routeID, err)
+		return
 	}
+	resp.Body.Close()
 }
 
 func detectPort(args []string) int {
-	cmdStr := strings.Join(args, " ")
-	switch {
-	case strings.Contains(cmdStr, "vite"):
-		return 5173
-	case strings.Contains(cmdStr, "next"):
-		return 3000
-	case strings.Contains(cmdStr, "nuxt"):
-		return 3000
-	default:
-		return 0
+	for _, arg := range args {
+		switch {
+		case strings.Contains(arg, "vite"):
+			return 5173
+		case strings.Contains(arg, "next"):
+			return 3000
+		case strings.Contains(arg, "nuxt"):
+			return 3000
+		}
 	}
+	return 0
 }
