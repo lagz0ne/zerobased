@@ -103,7 +103,8 @@ jobs:
             cd ../..
           done
 
-          # Wrapper package
+          # Wrapper package — include README for npmjs.com
+          cp README.md npm/zerobased/README.md
           cd npm/zerobased
           # Update optionalDependencies versions
           node -e "

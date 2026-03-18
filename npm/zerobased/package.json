@@ -14,5 +14,10 @@
     "@lagz0ne/zerobased-darwin-arm64": "0.0.1",
     "@lagz0ne/zerobased-darwin-x64": "0.0.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lagz0ne/zerobased"
+  },
+  "keywords": ["docker", "devtools", "unix-socket", "zero-config", "caddy", "reverse-proxy"]
 }
