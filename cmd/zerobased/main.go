@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/lagz0ne/zerobased/internal/classifier"
 	"github.com/lagz0ne/zerobased/internal/daemon"
@@ -65,6 +67,8 @@ dispatch:
 		cmdStart()
 	case "stop":
 		cmdStop()
+	case "logs":
+		cmdLogs()
 	case "run":
 		cmdRun()
 	case "env":
@@ -93,8 +97,9 @@ Flags:
   --prefix <prefix>          Env var prefix (default: ZB → ZB_POSTGRES_5432; "" → POSTGRES_5432)
 
 Commands:
-  start              Start daemon (watches docker.sock, manages Caddy)
+  start [-d]         Start daemon (-d for detached/background mode)
   stop               Stop daemon + Caddy + cleanup all sockets
+  logs [-f]          Show daemon logs (-f to follow)
   run [name] <cmd>   Wrap dev server, inject ZB_* env vars, register route
   env [--export] [project]   Print connection strings (--export for shell eval)
   ps                 Show all discovered services across all projects
@@ -109,7 +114,72 @@ Shell eval:
   eval "$(zerobased env --export acountee)"`)
 }
 
+func zerobasedDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".zerobased")
+}
+
+func pidFile() string  { return filepath.Join(zerobasedDir(), "daemon.pid") }
+func logFile() string  { return filepath.Join(zerobasedDir(), "daemon.log") }
+
 func cmdStart() {
+	detached := false
+	for _, arg := range os.Args[2:] {
+		if arg == "-d" || arg == "--detach" {
+			detached = true
+		}
+	}
+
+	if detached {
+		// Check if already running
+		if pid, err := readPID(); err == nil {
+			if process, err := os.FindProcess(pid); err == nil {
+				if err := process.Signal(syscall.Signal(0)); err == nil {
+					log.Fatalf("daemon already running (pid %d)", pid)
+				}
+			}
+		}
+
+		// Re-exec ourselves without -d, redirecting to log file
+		os.MkdirAll(zerobasedDir(), 0755)
+		lf, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Fatalf("open log: %v", err)
+		}
+
+		// Build args without -d
+		var args []string
+		for _, a := range os.Args[1:] {
+			if a != "-d" && a != "--detach" {
+				args = append(args, a)
+			}
+		}
+
+		exe, _ := os.Executable()
+		cmd := exec.Command(exe, args...)
+		cmd.Stdout = lf
+		cmd.Stderr = lf
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("start daemon: %v", err)
+		}
+
+		os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
+		lf.Close()
+
+		// Wait briefly to catch immediate failures
+		time.Sleep(500 * time.Millisecond)
+		if cmd.ProcessState != nil {
+			log.Fatalf("daemon exited immediately — check %s", logFile())
+		}
+
+		fmt.Printf("daemon started (pid %d)\n", cmd.Process.Pid)
+		fmt.Printf("logs: %s\n", logFile())
+		return
+	}
+
+	// Foreground mode
 	opts := daemon.Options{
 		BaseDir:    daemon.DefaultBaseDir(),
 		DockerHost: dockerHost,
@@ -139,6 +209,17 @@ func cmdStart() {
 }
 
 func cmdStop() {
+	// Kill background daemon if running
+	if pid, err := readPID(); err == nil {
+		if process, err := os.FindProcess(pid); err == nil {
+			if err := process.Signal(syscall.SIGTERM); err == nil {
+				fmt.Printf("sent SIGTERM to daemon (pid %d)\n", pid)
+			}
+		}
+		os.Remove(pidFile())
+	}
+
+	// Also clean up Caddy container
 	opts := daemon.Options{
 		BaseDir:    daemon.DefaultBaseDir(),
 		DockerHost: dockerHost,
@@ -147,9 +228,47 @@ func cmdStop() {
 	if err != nil {
 		log.Fatalf("init: %v", err)
 	}
-	ctx := context.Background()
-	d.Stop(ctx)
+	d.Stop(context.Background())
 	log.Println("stopped")
+}
+
+func cmdLogs() {
+	follow := false
+	for _, arg := range os.Args[2:] {
+		if arg == "-f" || arg == "--follow" {
+			follow = true
+		}
+	}
+
+	lf := logFile()
+	if _, err := os.Stat(lf); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "no daemon logs found")
+		os.Exit(1)
+	}
+
+	if follow {
+		cmd := exec.Command("tail", "-f", lf)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	} else {
+		cmd := exec.Command("tail", "-100", lf)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	}
+}
+
+func readPID() (int, error) {
+	data, err := os.ReadFile(pidFile())
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
+		return 0, err
+	}
+	return pid, nil
 }
 
 func cmdRun() {
