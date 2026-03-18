@@ -2,7 +2,7 @@
 
 Zero-config Docker service router. Watches `docker.sock` for container events, auto-classifies ports, creates Unix sockets + HTTP routes. Cleans up when containers stop.
 
-No config files. No Docker labels. No setup scripts. Your existing `docker-compose.yml` works as-is.
+No config files. No Docker labels. No setup scripts. No external dependencies. Your existing `docker-compose.yml` works as-is.
 
 ## Install
 
@@ -20,8 +20,8 @@ cd zerobased && make install
 ## Quick start
 
 ```bash
-# Start the daemon (once per machine)
-zerobased start
+# Start the daemon (background)
+zerobased start -d
 
 # Your existing workflow — unchanged
 docker compose up -d
@@ -38,41 +38,100 @@ acountee:
   nats            http   80   → http://nats-80.acountee.localhost
   nats            http   8222 → http://nats-8222.acountee.localhost
   nats            port   4222 → localhost:26987
-  otel-collector  socket 4317 → unix://~/.zerobased/sockets/acountee/otel-collector-4317.sock
-  otel-collector  http   4318 → http://otel-collector-4318.acountee.localhost
 ```
 
 ## CLI
 
 ```
-zerobased start              Start daemon (watches docker.sock, manages Caddy)
-zerobased stop               Stop daemon + Caddy + cleanup all sockets
-zerobased run [name] <cmd>   Wrap dev server, register route, cleanup on exit
-zerobased env [project]      Print connection strings for a project
-zerobased ps                 Show all discovered services across all projects
-zerobased get <service>      Print one connection string
+zerobased [flags] <command> [args...]
+
+Flags:
+  -H, --docker-host <host>   Docker daemon socket
+  --prefix <prefix>          Env var prefix (default: ZB; "" for no prefix)
+
+Commands:
+  start [-d]                               Start daemon (-d for background)
+  stop                                     Stop daemon + cleanup
+  logs [-f]                                Show daemon logs (-f to follow)
+  run [name] <cmd>                         Wrap dev server, inject env vars, register route
+  env [--export] [project]                 Print connection strings
+  ps                                       Show all discovered services
+  get <service> [-t template] [-v k=v]     Print one connection string
+```
+
+### Daemon
+
+```bash
+zerobased start              # foreground (Ctrl+C to stop)
+zerobased start -d           # background (like docker compose up -d)
+zerobased logs -f            # follow daemon logs
+zerobased stop               # stop + cleanup
 ```
 
 ### Wrapping dev servers
 
 ```bash
 zerobased run acountee pnpm dev    # → http://acountee.localhost
-zerobased run api bun run serve    # → http://api.localhost
 ```
 
-The route is registered on start and cleaned up when the process exits.
+Automatically injects `ZB_*` env vars for all project services:
+
+```
+ZB_POSTGRES_5432=postgresql://postgres@/postgres?host=~/.zerobased/sockets/acountee
+ZB_NATS_4222=localhost:26987
+ZB_NATS_80=http://nats-80.acountee.localhost
+```
+
+### Connection strings
+
+```bash
+# Default
+zerobased get postgres
+# postgresql://postgres@/postgres?host=~/.zerobased/sockets/acountee
+
+# With template + user vars
+zerobased get postgres \
+  -t 'postgresql://{{user}}:{{pass}}@/{{db}}?host={{socket_dir}}' \
+  -v user=postgres -v pass=secret -v db=mydb
+
+# Just the socket directory
+zerobased get postgres -t '{{socket_dir}}'
+
+# NATS with scheme
+zerobased get nats -t 'nats://{{host}}:{{port}}'
+```
+
+Template variables: `project`, `service`, `container_port`, `method`, `conn`, `url`, `socket`, `socket_dir`, `host`, `port`
+
+### Shell eval
+
+```bash
+eval "$(zerobased env --export acountee)"
+echo $ZB_POSTGRES_5432
+
+# Custom prefix
+eval "$(zerobased --prefix APP env --export acountee)"
+echo $APP_POSTGRES_5432
+
+# No prefix
+eval "$(zerobased --prefix '' env --export acountee)"
+echo $POSTGRES_5432
+```
 
 ## How it works
 
 1. `zerobased start` launches a Caddy container (host network mode) and watches `/var/run/docker.sock`
-2. On container start: inspects ports + Compose labels, classifies each port, creates socat bridges or Caddy routes
+2. On container start: inspects ports + Compose labels, classifies each port, creates Unix socket bridges or Caddy routes
 3. On container stop: removes sockets + deregisters routes automatically
+
+Unix sockets are pure Go (`net.Listen("unix")` + bidirectional `io.Copy`) — no `socat` dependency.
 
 ### Auto-classification
 
 | Container port | Type | Exposure |
 |---|---|---|
-| 5432, 3306, 6379, 27017, 4317 | Database / gRPC | Unix socket via socat |
+| 5432, 3306, 6379, 27017, 4317 | Database / gRPC | Unix socket |
+| 6222, 9222, 7946, 2377, 2380 | Internal / cluster | Skipped |
 | 80, 443, 3000, 3001, 4318, 5173, 8000, 8025, 8080, 8222, 8443, 8888, 9090 | HTTP / WebSocket | Caddy reverse proxy |
 | Everything else | TCP | Deterministic port hash |
 
@@ -91,7 +150,7 @@ Derived from Docker Compose labels (`com.docker.compose.project` + `com.docker.c
 |---|---|---|
 | HTTP | `<service>-<port>.<project>.localhost` | `nats-80.acountee.localhost` |
 | Socket | `~/.zerobased/sockets/<project>/<service>-<port>.sock` | `~/.zerobased/sockets/acountee/redis-6379.sock` |
-| Socket (Postgres) | `~/.zerobased/sockets/<project>/.s.PGSQL.5432` | Uses native Postgres socket convention |
+| Socket (Postgres) | `~/.zerobased/sockets/<project>/.s.PGSQL.5432` | Native Postgres socket convention |
 | Port | `hash("<project>:<service>:<port>") % 20000 + 10000` | Stable across restarts |
 
 ### Multi-project isolation
