@@ -29,6 +29,7 @@ type Options struct {
 	Args       []string // command + args
 	Port       int      // dev server port (0 = auto-detect)
 	DockerHost string   // custom docker host
+	EnvPrefix  string   // env var prefix (default "ZB", empty "" for no prefix)
 }
 
 // Run wraps a dev server process, injects ZB_* env vars for project services,
@@ -57,7 +58,7 @@ func Run(opts Options) error {
 	upstream := fmt.Sprintf("localhost:%d", port)
 
 	// Resolve project services and build env vars
-	zbEnv := resolveProjectEnv(name, opts.DockerHost)
+	zbEnv := resolveProjectEnv(name, opts.DockerHost, opts.EnvPrefix)
 
 	cmd := exec.Command(opts.Args[0], opts.Args[1:]...)
 	cmd.Stdin = os.Stdin
@@ -100,7 +101,7 @@ func Run(opts Options) error {
 
 // resolveProjectEnv queries Docker for compose services matching the project name
 // and returns ZB_<SERVICE>_<PORT>=<conn_string> env vars.
-func resolveProjectEnv(project, dockerHost string) []string {
+func resolveProjectEnv(project, dockerHost, prefix string) []string {
 	dc, err := docker.NewWithHost(dockerHost)
 	if err != nil {
 		return nil
@@ -130,7 +131,7 @@ func resolveProjectEnv(project, dockerHost string) []string {
 		}
 	}
 
-	return env.AsEnvVars(endpoints)
+	return env.AsEnvVars(prefix, endpoints)
 }
 
 func registerRoute(routeID, hostname, upstream string) error {

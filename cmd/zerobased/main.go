@@ -19,7 +19,10 @@ import (
 )
 
 // Global flags parsed before subcommand dispatch.
-var dockerHost string
+var (
+	dockerHost string
+	envPrefix  = "ZB" // default prefix for env vars; "" removes prefix
+)
 
 func main() {
 	log.SetFlags(log.Ltime)
@@ -36,6 +39,12 @@ func main() {
 			args = args[1:]
 		case args[0] == "--docker-host" && len(args) > 1:
 			dockerHost = args[1]
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--prefix="):
+			envPrefix = strings.TrimPrefix(args[0], "--prefix=")
+			args = args[1:]
+		case args[0] == "--prefix" && len(args) > 1:
+			envPrefix = args[1]
 			args = args[2:]
 		default:
 			goto dispatch
@@ -81,6 +90,7 @@ Usage:
 
 Flags:
   -H, --docker-host <host>   Docker daemon socket (default: $DOCKER_HOST or unix:///var/run/docker.sock)
+  --prefix <prefix>          Env var prefix (default: ZB → ZB_POSTGRES_5432; "" → POSTGRES_5432)
 
 Commands:
   start              Start daemon (watches docker.sock, manages Caddy)
@@ -162,6 +172,7 @@ func cmdRun() {
 		Name:       name,
 		Args:       cmdArgs,
 		DockerHost: dockerHost,
+		EnvPrefix:  envPrefix,
 	}); err != nil {
 		log.Fatal(err)
 	}
@@ -228,7 +239,7 @@ func cmdEnv() {
 	}
 
 	if export {
-		fmt.Print(env.PrintExport(endpoints))
+		fmt.Print(env.PrintExport(envPrefix, endpoints))
 	} else {
 		fmt.Print(env.PrintEndpoints(endpoints))
 	}

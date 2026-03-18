@@ -64,16 +64,21 @@ func Hostname(project, service string, containerPort uint16) string {
 	return fmt.Sprintf("%s-%d.%s.localhost", service, containerPort, project)
 }
 
-// EnvKey returns the environment variable name for an endpoint: ZB_<SERVICE>_<PORT>
-func EnvKey(ep ServiceEndpoint) string {
-	return fmt.Sprintf("ZB_%s_%d", strings.ToUpper(strings.ReplaceAll(ep.Service, "-", "_")), ep.ContainerPort)
+// EnvKey returns the environment variable name for an endpoint.
+// prefix "ZB" → ZB_POSTGRES_5432, prefix "" → POSTGRES_5432
+func EnvKey(prefix string, ep ServiceEndpoint) string {
+	name := fmt.Sprintf("%s_%d", strings.ToUpper(strings.ReplaceAll(ep.Service, "-", "_")), ep.ContainerPort)
+	if prefix == "" {
+		return name
+	}
+	return prefix + "_" + name
 }
 
 // AsEnvVars returns endpoints as KEY=VALUE pairs suitable for os.Environ / exec.Cmd.Env.
-func AsEnvVars(endpoints []ServiceEndpoint) []string {
+func AsEnvVars(prefix string, endpoints []ServiceEndpoint) []string {
 	vars := make([]string, 0, len(endpoints))
 	for _, ep := range endpoints {
-		vars = append(vars, EnvKey(ep)+"="+ep.ConnString)
+		vars = append(vars, EnvKey(prefix, ep)+"="+ep.ConnString)
 	}
 	return vars
 }
@@ -89,10 +94,10 @@ func PrintEndpoints(endpoints []ServiceEndpoint) string {
 }
 
 // PrintExport formats endpoints as shell export statements.
-func PrintExport(endpoints []ServiceEndpoint) string {
+func PrintExport(prefix string, endpoints []ServiceEndpoint) string {
 	var b strings.Builder
 	for _, ep := range endpoints {
-		fmt.Fprintf(&b, "export %s=%q\n", EnvKey(ep), ep.ConnString)
+		fmt.Fprintf(&b, "export %s=%q\n", EnvKey(prefix, ep), ep.ConnString)
 	}
 	return b.String()
 }
