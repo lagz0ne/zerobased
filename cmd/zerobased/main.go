@@ -156,6 +156,9 @@ func cmdEnv() {
 				continue
 			}
 			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
+			if method == classifier.Internal {
+				continue
+			}
 			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
 			endpoints = append(endpoints, ep)
 		}
@@ -206,6 +209,9 @@ func cmdPs() {
 					continue
 				}
 				method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
+				if method == classifier.Internal {
+					continue
+				}
 				ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
 				fmt.Printf("  %-15s %-6s %d → %s\n", c.Service, method, pb.ContainerPort, ep.ConnString)
 			}
@@ -236,6 +242,9 @@ func cmdGet() {
 				continue
 			}
 			method := classifier.ClassifyFromLabels(pb.ContainerPort, c.Labels)
+			if method == classifier.Internal {
+				continue
+			}
 			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
 			fmt.Println(ep.ConnString)
 		}

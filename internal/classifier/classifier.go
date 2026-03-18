@@ -9,10 +9,20 @@ import (
 type ExposeMethod string
 
 const (
-	Socket ExposeMethod = "socket"
-	HTTP   ExposeMethod = "http"
-	Port   ExposeMethod = "port"
+	Socket   ExposeMethod = "socket"
+	HTTP     ExposeMethod = "http"
+	Port     ExposeMethod = "port"
+	Internal ExposeMethod = "internal" // never exposed — cluster/inter-node ports
 )
+
+// wellKnownInternal maps ports that are internal-only and should never be exposed.
+var wellKnownInternal = map[uint16]bool{
+	6222:  true, // NATS cluster/routing
+	9222:  true, // NATS leafnode
+	7946:  true, // Docker Swarm gossip
+	2377:  true, // Docker Swarm management
+	2380:  true, // etcd peer
+}
 
 // wellKnownSockets maps container ports to socket-based exposure.
 var wellKnownSockets = map[uint16]bool{
@@ -54,6 +64,9 @@ func Classify(containerPort uint16, labelOverride string) ExposeMethod {
 		}
 	}
 
+	if wellKnownInternal[containerPort] {
+		return Internal
+	}
 	if wellKnownSockets[containerPort] {
 		return Socket
 	}

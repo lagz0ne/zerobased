@@ -28,6 +28,15 @@ func TestClassify_WellKnownHTTP(t *testing.T) {
 	}
 }
 
+func TestClassify_InternalPorts(t *testing.T) {
+	tests := []uint16{6222, 9222, 7946, 2377, 2380}
+	for _, port := range tests {
+		if got := Classify(port, ""); got != Internal {
+			t.Errorf("Classify(%d) = %s, want internal", port, got)
+		}
+	}
+}
+
 func TestClassify_UnknownPort(t *testing.T) {
 	if got := Classify(4222, ""); got != Port {
 		t.Errorf("Classify(4222) = %s, want port", got)

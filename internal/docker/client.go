@@ -134,9 +134,11 @@ func (c *Client) ListRunning(ctx context.Context) ([]*ContainerInfo, error) {
 			}
 		}
 
-		// Extract exposed ports
+		// Extract exposed ports (deduplicate — ContainerList may list both exposed and published)
+		seen := make(map[uint16]bool)
 		for _, p := range ctr.Ports {
-			if p.PrivatePort > 0 {
+			if p.PrivatePort > 0 && !seen[p.PrivatePort] {
+				seen[p.PrivatePort] = true
 				info.Ports = append(info.Ports, PortBinding{
 					ContainerPort: p.PrivatePort,
 					Proto:         p.Type,

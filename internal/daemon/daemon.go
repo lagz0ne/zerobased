@@ -157,6 +157,9 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 		}
 
 		method := classifier.ClassifyFromLabels(pb.ContainerPort, info.Labels)
+		if method == classifier.Internal {
+			continue
+		}
 
 		entry := ServiceEntry{
 			ContainerID:   info.ID,
