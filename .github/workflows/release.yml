@@ -1,0 +1,117 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            npm_pkg: linux-x64
+          - goos: linux
+            goarch: arm64
+            npm_pkg: linux-arm64
+          - goos: darwin
+            goarch: arm64
+            npm_pkg: darwin-arm64
+          - goos: darwin
+            goarch: amd64
+            npm_pkg: darwin-x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -ldflags "-s -w -X main.version=$VERSION" \
+            -o zerobased-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./cmd/zerobased
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zerobased-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: zerobased-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+  npm:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Platform packages
+          for dir in npm/linux-x64 npm/linux-arm64 npm/darwin-arm64 npm/darwin-x64; do
+            pkg_name=$(basename "$dir")
+            # Map npm dir name to binary name
+            case "$pkg_name" in
+              linux-x64)    bin="zerobased-linux-amd64" ;;
+              linux-arm64)  bin="zerobased-linux-arm64" ;;
+              darwin-arm64) bin="zerobased-darwin-arm64" ;;
+              darwin-x64)   bin="zerobased-darwin-amd64" ;;
+            esac
+
+            cp "dist/$bin" "$dir/zerobased"
+            chmod +x "$dir/zerobased"
+            cd "$dir"
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+            npm publish --access public
+            cd ../..
+          done
+
+          # Wrapper package
+          cd npm/zerobased
+          # Update optionalDependencies versions
+          node -e "
+            const pkg = require('./package.json');
+            for (const dep of Object.keys(pkg.optionalDependencies)) {
+              pkg.optionalDependencies[dep] = '$VERSION';
+            }
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm publish --access public

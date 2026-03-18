@@ -1,0 +1,9 @@
+{
+  "name": "@zerobased/linux-arm64",
+  "version": "0.0.1",
+  "description": "zerobased binary for linux-arm64",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["zerobased"],
+  "license": "MIT"
+}

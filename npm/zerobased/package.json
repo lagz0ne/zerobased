@@ -1,0 +1,18 @@
+{
+  "name": "zerobased",
+  "version": "0.0.1",
+  "description": "Zero-config Docker service router — auto-detects containers, creates Unix sockets + HTTP routes",
+  "bin": {
+    "zerobased": "bin/zerobased"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "optionalDependencies": {
+    "@zerobased/linux-x64": "0.0.1",
+    "@zerobased/linux-arm64": "0.0.1",
+    "@zerobased/darwin-arm64": "0.0.1",
+    "@zerobased/darwin-x64": "0.0.1"
+  },
+  "license": "MIT"
+}
