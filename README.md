@@ -101,7 +101,6 @@ Different Compose projects get different namespaces automatically. Run multiple 
 ## Requirements
 
 - Docker with Compose
-- `socat` installed on the host (`apt install socat` / `brew install socat`)
 - Linux or macOS (host must be able to reach container IPs directly)
 
 ## License
