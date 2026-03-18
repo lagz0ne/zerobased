@@ -53,7 +53,7 @@ Commands:
   start [-d]                               Start daemon (-d for background)
   stop                                     Stop daemon + cleanup
   logs [-f]                                Show daemon logs (-f to follow)
-  run [name] <cmd>                         Wrap dev server, inject env vars, register route
+  run [-p port] [name] <cmd>                Wrap dev server, auto-detect port, register route
   env [--export] [project]                 Print connection strings
   ps                                       Show all discovered services
   get <service> [-t template] [-v k=v]     Print one connection string
@@ -63,7 +63,7 @@ Commands:
 
 ```bash
 zerobased start              # foreground (Ctrl+C to stop)
-zerobased start -d           # background (like docker compose up -d)
+zerobased start -d           # background, auto-follows logs (Ctrl+C detaches)
 zerobased logs -f            # follow daemon logs
 zerobased stop               # stop + cleanup
 ```
@@ -71,10 +71,13 @@ zerobased stop               # stop + cleanup
 ### Wrapping dev servers
 
 ```bash
-zerobased run acountee pnpm dev    # → http://acountee.localhost
+zerobased run acountee pnpm dev           # auto-detects port from stdout/stderr
+zerobased run -p 3000 acountee pnpm dev   # explicit port
 ```
 
-Automatically injects `ZB_*` env vars for all project services:
+Port is auto-detected by scanning the child process output for `http://localhost:XXXX`. Works with Vite, Next, Nuxt, or any framework that prints its URL. Use `-p` if auto-detect doesn't work.
+
+Also injects `ZB_*` env vars for all project services:
 
 ```
 ZB_POSTGRES_5432=postgresql://postgres@/postgres?host=~/.zerobased/sockets/acountee
