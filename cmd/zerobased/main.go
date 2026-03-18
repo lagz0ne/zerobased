@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -188,9 +189,10 @@ func cmdStart() {
 			log.Fatalf("daemon exited immediately — check %s", logFile())
 		}
 
-		fmt.Printf("daemon started (pid %d)\n", cmd.Process.Pid)
-		fmt.Printf("logs: %s\n", logFile())
-		return
+		fmt.Printf("daemon started (pid %d) — Ctrl+C to detach\n", cmd.Process.Pid)
+
+		// Follow logs until Ctrl+C (daemon keeps running)
+		followLogs()
 	}
 
 	// Foreground mode
@@ -248,29 +250,112 @@ func cmdStop() {
 
 func cmdLogs() {
 	follow := false
-	for _, arg := range os.Args[2:] {
-		if arg == "-f" || arg == "--follow" {
+	lines := 100
+	for i := 2; i < len(os.Args); i++ {
+		switch {
+		case os.Args[i] == "-f" || os.Args[i] == "--follow":
 			follow = true
+		case strings.HasPrefix(os.Args[i], "-n") && len(os.Args[i]) > 2:
+			fmt.Sscanf(os.Args[i][2:], "%d", &lines)
+		case os.Args[i] == "-n" && i+1 < len(os.Args):
+			fmt.Sscanf(os.Args[i+1], "%d", &lines)
+			i++
 		}
 	}
 
-	lf := logFile()
-	if _, err := os.Stat(lf); os.IsNotExist(err) {
-		fmt.Fprintln(os.Stderr, "no daemon logs found")
-		os.Exit(1)
+	showLogs(lines, follow)
+}
+
+// followLogs shows recent logs then follows. Ctrl+C returns (doesn't kill daemon).
+func followLogs() {
+	showLogs(20, true)
+}
+
+func showLogs(lines int, follow bool) {
+	f, err := os.Open(logFile())
+	if err != nil {
+		if follow {
+			// Log file may not exist yet — wait for it
+			for i := 0; i < 30; i++ {
+				time.Sleep(200 * time.Millisecond)
+				f, err = os.Open(logFile())
+				if err == nil {
+					break
+				}
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "no daemon logs found")
+			return
+		}
+	}
+	defer f.Close()
+
+	printLastLines(f, lines)
+
+	if !follow {
+		return
 	}
 
-	if follow {
-		cmd := exec.Command("tail", "-f", lf)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Run()
-	} else {
-		cmd := exec.Command("tail", "-100", lf)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Run()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-sigs:
+			signal.Stop(sigs)
+			fmt.Println() // clean line after ^C
+			return
+		default:
+			n, _ := f.Read(buf)
+			if n > 0 {
+				os.Stdout.Write(buf[:n])
+			} else {
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
 	}
+}
+
+// printLastLines prints the last n lines from a file, seeking from the end.
+func printLastLines(f *os.File, n int) {
+	stat, err := f.Stat()
+	if err != nil || stat.Size() == 0 {
+		return
+	}
+
+	// Read from end to find n newlines
+	size := stat.Size()
+	bufSize := int64(8192)
+	if bufSize > size {
+		bufSize = size
+	}
+
+	found := 0
+	offset := size
+	for offset > 0 && found <= n {
+		readSize := bufSize
+		if readSize > offset {
+			readSize = offset
+		}
+		offset -= readSize
+		buf := make([]byte, readSize)
+		f.ReadAt(buf, offset)
+		for i := len(buf) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				found++
+				if found > n {
+					// Print from this position
+					offset += int64(i) + 1
+					break
+				}
+			}
+		}
+	}
+
+	f.Seek(offset, 0)
+	io.Copy(os.Stdout, f)
 }
 
 func readPID() (int, error) {
