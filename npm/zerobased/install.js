@@ -2,10 +2,10 @@ const fs = require("fs");
 const path = require("path");
 
 const PLATFORMS = {
-  "linux-x64": "@zerobased/linux-x64",
-  "linux-arm64": "@zerobased/linux-arm64",
-  "darwin-arm64": "@zerobased/darwin-arm64",
-  "darwin-x64": "@zerobased/darwin-x64",
+  "linux-x64": "@lagz0ne/zerobased-linux-x64",
+  "linux-arm64": "@lagz0ne/zerobased-linux-arm64",
+  "darwin-arm64": "@lagz0ne/zerobased-darwin-arm64",
+  "darwin-x64": "@lagz0ne/zerobased-darwin-x64",
 };
 
 const platform = `${process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "x64"}`;

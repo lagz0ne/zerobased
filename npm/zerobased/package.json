@@ -9,10 +9,10 @@
     "postinstall": "node install.js"
   },
   "optionalDependencies": {
-    "@zerobased/linux-x64": "0.0.1",
-    "@zerobased/linux-arm64": "0.0.1",
-    "@zerobased/darwin-arm64": "0.0.1",
-    "@zerobased/darwin-x64": "0.0.1"
+    "@lagz0ne/zerobased-linux-x64": "0.0.1",
+    "@lagz0ne/zerobased-linux-arm64": "0.0.1",
+    "@lagz0ne/zerobased-darwin-arm64": "0.0.1",
+    "@lagz0ne/zerobased-darwin-x64": "0.0.1"
   },
   "license": "MIT"
 }

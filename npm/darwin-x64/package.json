@@ -1,5 +1,5 @@
 {
-  "name": "@zerobased/darwin-x64",
+  "name": "@lagz0ne/zerobased-darwin-x64",
   "version": "0.0.1",
   "description": "zerobased binary for darwin-x64",
   "os": ["darwin"],
