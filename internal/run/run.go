@@ -1,17 +1,20 @@
 package run
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
+	"regexp"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -23,11 +26,14 @@ import (
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
+// Matches lines like "Local: http://localhost:5173/" or "ready in 123ms → http://localhost:3000"
+var portPattern = regexp.MustCompile(`https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)`)
+
 // Options for the run command.
 type Options struct {
 	Name       string   // route name (defaults to cwd basename)
 	Args       []string // command + args
-	Port       int      // dev server port (0 = auto-detect)
+	Port       int      // dev server port (0 = auto-detect from stdout)
 	DockerHost string   // custom docker host
 	EnvPrefix  string   // env var prefix (default "ZB", empty "" for no prefix)
 }
@@ -45,42 +51,81 @@ func Run(opts Options) error {
 		return fmt.Errorf("no command specified")
 	}
 
-	port := opts.Port
-	if port == 0 {
-		port = detectPort(opts.Args)
-	}
-	if port == 0 {
-		port = 3000
-	}
-
 	hostname := fmt.Sprintf("%s.localhost", name)
 	routeID := fmt.Sprintf("zb-run-%s", name)
-	upstream := fmt.Sprintf("localhost:%d", port)
 
 	// Resolve project services and build env vars
 	zbEnv := resolveProjectEnv(name, opts.DockerHost, opts.EnvPrefix)
 
 	cmd := exec.Command(opts.Args[0], opts.Args[1:]...)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// Only set cmd.Env if we have vars to inject (nil = inherit parent env)
 	if len(zbEnv) > 0 {
 		cmd.Env = append(os.Environ(), zbEnv...)
 		log.Printf("injected %d env vars for project %q", len(zbEnv), name)
 	}
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start %s: %w", opts.Args[0], err)
-	}
+	if opts.Port > 0 {
+		// Explicit port — register route immediately, pass through stdout/stderr
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 
-	if err := registerRoute(routeID, hostname, upstream); err != nil {
-		log.Printf("warning: failed to register route: %v", err)
-		log.Printf("app will still be available at localhost:%d", port)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("start %s: %w", opts.Args[0], err)
+		}
+
+		upstream := fmt.Sprintf("localhost:%d", opts.Port)
+		if err := registerRoute(routeID, hostname, upstream); err != nil {
+			log.Printf("warning: failed to register route: %v", err)
+		} else {
+			log.Printf("→ http://%s (port %d)", hostname, opts.Port)
+		}
 	} else {
-		log.Printf("→ http://%s", hostname)
+		// Auto-detect port from stdout+stderr — tee output while scanning for URL
+		pr, pw := io.Pipe()
+		cmd.Stdout = io.MultiWriter(os.Stdout, pw)
+		cmd.Stderr = io.MultiWriter(os.Stderr, pw)
+
+		if err := cmd.Start(); err != nil {
+			pw.Close()
+			return fmt.Errorf("start %s: %w", opts.Args[0], err)
+		}
+
+		// Scan stdout in background for port, with timeout
+		portCh := make(chan int, 1)
+		go func() {
+			defer pw.Close()
+			scanner := bufio.NewScanner(pr)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if m := portPattern.FindStringSubmatch(line); m != nil {
+					if p, err := strconv.Atoi(m[1]); err == nil {
+						portCh <- p
+						// Keep draining to avoid blocking the pipe
+						io.Copy(io.Discard, pr)
+						return
+					}
+				}
+			}
+			portCh <- 0 // no port found
+		}()
+
+		select {
+		case port := <-portCh:
+			if port > 0 {
+				upstream := fmt.Sprintf("localhost:%d", port)
+				if err := registerRoute(routeID, hostname, upstream); err != nil {
+					log.Printf("warning: failed to register route: %v", err)
+				} else {
+					log.Printf("→ http://%s (detected port %d)", hostname, port)
+				}
+			} else {
+				log.Printf("warning: could not detect port — use -p to specify")
+			}
+		case <-time.After(30 * time.Second):
+			log.Printf("warning: port detection timed out after 30s — use -p to specify")
+		}
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -101,8 +146,7 @@ func Run(opts Options) error {
 	return nil
 }
 
-// resolveProjectEnv queries Docker for compose services matching the project name
-// and returns PREFIX_<SERVICE>_<PORT>=<conn_string> env vars.
+// resolveProjectEnv queries Docker for compose services matching the project name.
 func resolveProjectEnv(project, dockerHost, prefix string) []string {
 	dc, err := docker.NewWithHost(dockerHost)
 	if err != nil {
@@ -169,18 +213,4 @@ func deregisterRoute(routeID string) {
 		return
 	}
 	resp.Body.Close()
-}
-
-func detectPort(args []string) int {
-	for _, arg := range args {
-		switch {
-		case strings.Contains(arg, "vite"):
-			return 5173
-		case strings.Contains(arg, "next"):
-			return 3000
-		case strings.Contains(arg, "nuxt"):
-			return 3000
-		}
-	}
-	return 0
 }

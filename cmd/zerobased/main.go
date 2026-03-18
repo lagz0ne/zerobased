@@ -100,7 +100,7 @@ Commands:
   start [-d]         Start daemon (-d for detached/background mode)
   stop               Stop daemon + Caddy + cleanup all sockets
   logs [-f]          Show daemon logs (-f to follow)
-  run [name] <cmd>   Wrap dev server, inject ZB_* env vars, register route
+  run [-p port] [name] <cmd>   Wrap dev server, auto-detect port, register route
   env [--export] [project]   Print connection strings (--export for shell eval)
   ps                 Show all discovered services across all projects
   get <service> [-t template] [-v key=val]   Print connection string
@@ -373,9 +373,22 @@ func readPID() (int, error) {
 func cmdRun() {
 	args := os.Args[2:]
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased run [name] <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: zerobased run [-p port] [name] <command> [args...]")
 		os.Exit(1)
 	}
+
+	// Parse run-specific flags
+	port := 0
+	var remaining []string
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "-p" || args[i] == "--port") && i+1 < len(args) {
+			fmt.Sscanf(args[i+1], "%d", &port)
+			i++
+		} else {
+			remaining = append(remaining, args[i])
+		}
+	}
+	args = remaining
 
 	name := ""
 	cmdArgs := args
@@ -389,6 +402,7 @@ func cmdRun() {
 	if err := run.Run(run.Options{
 		Name:       name,
 		Args:       cmdArgs,
+		Port:       port,
 		DockerHost: dockerHost,
 		EnvPrefix:  envPrefix,
 	}); err != nil {
