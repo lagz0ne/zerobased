@@ -102,10 +102,20 @@ Commands:
   run [name] <cmd>   Wrap dev server, inject ZB_* env vars, register route
   env [--export] [project]   Print connection strings (--export for shell eval)
   ps                 Show all discovered services across all projects
-  get <service>      Print one connection string
+  get <service> [-t template] [-v key=val]   Print connection string
+
+Templates (zerobased get -t):
+  zerobased get postgres                     Default connection string
+  zerobased get postgres -t '{{socket_dir}}' Just the socket directory
+  zerobased get postgres -t 'postgresql://{{user}}:{{pass}}@/{{db}}?host={{socket_dir}}' \
+    -v user=postgres -v pass=secret -v db=mydb
+  zerobased get nats -t 'nats://{{host}}:{{port}}'
+
+  Variables: project, service, container_port, method, conn, url,
+             socket, socket_dir (socket types), host, port (http/port types)
 
 Environment injection (zerobased run):
-  ZB_POSTGRES_5432   postgresql://postgres@/postgres?host=~/.zerobased/sockets/...
+  ZB_POSTGRES_5432   postgresql://...?host=~/.zerobased/sockets/acountee
   ZB_NATS_4222       localhost:26987
   ZB_NATS_80         http://nats-80.acountee.localhost
 
