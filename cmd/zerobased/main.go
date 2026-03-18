@@ -407,12 +407,39 @@ func cmdPs() {
 }
 
 func cmdGet() {
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased get <service> [port]")
+	// Parse: zerobased get <service> [-t template] [-v key=val]...
+	args := os.Args[2:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: zerobased get <service> [-t template] [-v key=val]...")
 		os.Exit(1)
 	}
 
-	target := os.Args[2]
+	target := ""
+	tmpl := ""
+	userVars := map[string]string{}
+
+	for i := 0; i < len(args); i++ {
+		switch {
+		case (args[i] == "-t" || args[i] == "--template") && i+1 < len(args):
+			tmpl = args[i+1]
+			i++
+		case (args[i] == "-v" || args[i] == "--var") && i+1 < len(args):
+			if k, v, ok := strings.Cut(args[i+1], "="); ok {
+				userVars[k] = v
+			}
+			i++
+		default:
+			if target == "" {
+				target = args[i]
+			}
+		}
+	}
+
+	if target == "" {
+		fmt.Fprintln(os.Stderr, "usage: zerobased get <service> [-t template] [-v key=val]...")
+		os.Exit(1)
+	}
+
 	baseDir := daemon.DefaultBaseDir()
 	containers, cleanup, err := listContainers()
 	if err != nil {
@@ -433,7 +460,17 @@ func cmdGet() {
 				continue
 			}
 			ep := env.ForPort(baseDir, c.Project, c.Service, pb.ContainerPort, method)
-			fmt.Println(ep.ConnString)
+
+			if tmpl != "" {
+				vars := env.TemplateVars(baseDir, ep)
+				// Merge user vars (override discovered ones)
+				for k, v := range userVars {
+					vars[k] = v
+				}
+				fmt.Println(env.RenderTemplate(tmpl, vars))
+			} else {
+				fmt.Println(ep.ConnString)
+			}
 		}
 		return
 	}

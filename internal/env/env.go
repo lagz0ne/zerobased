@@ -3,6 +3,7 @@ package env
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/lagz0ne/zerobased/internal/classifier"
@@ -57,6 +58,45 @@ func ForPort(baseDir, project, service string, containerPort uint16, method clas
 	}
 
 	return ep
+}
+
+// TemplateVars returns all discoverable variables for an endpoint.
+func TemplateVars(baseDir string, ep ServiceEndpoint) map[string]string {
+	vars := map[string]string{
+		"project":        ep.Project,
+		"service":        ep.Service,
+		"container_port": strconv.FormatUint(uint64(ep.ContainerPort), 10),
+		"method":         string(ep.Method),
+		"conn":           ep.ConnString,
+	}
+
+	switch ep.Method {
+	case classifier.Socket:
+		sockDir := filepath.Join(baseDir, ep.Project)
+		filename := classifier.SocketFilename(ep.Service, ep.ContainerPort)
+		vars["socket"] = filepath.Join(sockDir, filename)
+		vars["socket_dir"] = sockDir
+	case classifier.HTTP:
+		hostname := Hostname(ep.Project, ep.Service, ep.ContainerPort)
+		vars["host"] = hostname
+		vars["url"] = "http://" + hostname
+		vars["port"] = strconv.FormatUint(uint64(ep.ContainerPort), 10)
+	case classifier.Port:
+		p := ports.DeterministicPort(ep.Project, ep.Service, ep.ContainerPort)
+		vars["host"] = "localhost"
+		vars["port"] = strconv.FormatUint(uint64(p), 10)
+	}
+
+	return vars
+}
+
+// RenderTemplate replaces {{key}} placeholders with values from vars.
+func RenderTemplate(tmpl string, vars map[string]string) string {
+	result := tmpl
+	for k, v := range vars {
+		result = strings.ReplaceAll(result, "{{"+k+"}}", v)
+	}
+	return result
 }
 
 // Hostname returns the HTTP hostname for a service port.
