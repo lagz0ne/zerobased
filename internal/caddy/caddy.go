@@ -13,7 +13,6 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 )
 
 const (
@@ -57,22 +56,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	io.Copy(io.Discard, reader)
 	reader.Close()
 
-	// Caddyfile that enables the admin API and listens on :80 with auto_https off
-	caddyfile := `{
-	admin 0.0.0.0:2019
-	auto_https off
-}
-`
-
+	// Start Caddy with no config — it binds admin API on :2019 by default.
+	// We then load the full config via the admin API (avoids stdin race on WSL2).
 	resp, err := m.docker.ContainerCreate(ctx,
 		&container.Config{
 			Image: caddyImage,
-			Cmd:   []string{"caddy", "run", "--adapter", "caddyfile", "--config", "/dev/stdin"},
-			ExposedPorts: nat.PortSet{
-				nat.Port("80/tcp"):   struct{}{},
-				nat.Port("2019/tcp"): struct{}{},
-			},
-			OpenStdin: true,
+			Cmd:   []string{"caddy", "run", "--config", "", "--adapter", ""},
 		},
 		&container.HostConfig{
 			NetworkMode: "host",
@@ -88,24 +77,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("create caddy container: %w", err)
 	}
 
-	// Attach to write Caddyfile via stdin
-	attach, err := m.docker.ContainerAttach(ctx, resp.ID, container.AttachOptions{
-		Stream: true,
-		Stdin:  true,
-	})
-	if err != nil {
-		return fmt.Errorf("attach caddy: %w", err)
-	}
-
 	if err := m.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		attach.Close()
 		return fmt.Errorf("start caddy: %w", err)
 	}
-
-	// Write Caddyfile through stdin and close
-	attach.Conn.Write([]byte(caddyfile))
-	attach.CloseWrite()
-	attach.Close()
 
 	// Wait for admin API to be ready
 	for i := 0; i < 30; i++ {
