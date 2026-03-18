@@ -64,12 +64,35 @@ func Hostname(project, service string, containerPort uint16) string {
 	return fmt.Sprintf("%s-%d.%s.localhost", service, containerPort, project)
 }
 
+// EnvKey returns the environment variable name for an endpoint: ZB_<SERVICE>_<PORT>
+func EnvKey(ep ServiceEndpoint) string {
+	return fmt.Sprintf("ZB_%s_%d", strings.ToUpper(strings.ReplaceAll(ep.Service, "-", "_")), ep.ContainerPort)
+}
+
+// AsEnvVars returns endpoints as KEY=VALUE pairs suitable for os.Environ / exec.Cmd.Env.
+func AsEnvVars(endpoints []ServiceEndpoint) []string {
+	vars := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		vars = append(vars, EnvKey(ep)+"="+ep.ConnString)
+	}
+	return vars
+}
+
 // PrintEndpoints formats a slice of endpoints for display.
 func PrintEndpoints(endpoints []ServiceEndpoint) string {
 	var b strings.Builder
 	for _, ep := range endpoints {
 		fmt.Fprintf(&b, "  %-12s %-8s %s/%d → %s\n",
 			ep.Project, ep.Service, ep.Method, ep.ContainerPort, ep.ConnString)
+	}
+	return b.String()
+}
+
+// PrintExport formats endpoints as shell export statements.
+func PrintExport(endpoints []ServiceEndpoint) string {
+	var b strings.Builder
+	for _, ep := range endpoints {
+		fmt.Fprintf(&b, "export %s=%q\n", EnvKey(ep), ep.ConnString)
 	}
 	return b.String()
 }

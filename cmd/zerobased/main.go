@@ -85,10 +85,18 @@ Flags:
 Commands:
   start              Start daemon (watches docker.sock, manages Caddy)
   stop               Stop daemon + Caddy + cleanup all sockets
-  run [name] <cmd>   Wrap dev server, register route, cleanup on exit
-  env [project]      Print connection strings for a project
+  run [name] <cmd>   Wrap dev server, inject ZB_* env vars, register route
+  env [--export] [project]   Print connection strings (--export for shell eval)
   ps                 Show all discovered services across all projects
-  get <service>      Print one connection string`)
+  get <service>      Print one connection string
+
+Environment injection (zerobased run):
+  ZB_POSTGRES_5432   postgresql://postgres@/postgres?host=~/.zerobased/sockets/...
+  ZB_NATS_4222       localhost:26987
+  ZB_NATS_80         http://nats-80.acountee.localhost
+
+Shell eval:
+  eval "$(zerobased env --export acountee)"`)
 }
 
 func cmdStart() {
@@ -150,7 +158,11 @@ func cmdRun() {
 		}
 	}
 
-	if err := run.Run(name, cmdArgs, 0); err != nil {
+	if err := run.Run(run.Options{
+		Name:       name,
+		Args:       cmdArgs,
+		DockerHost: dockerHost,
+	}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -170,9 +182,15 @@ func listContainers() ([]*docker.ContainerInfo, func(), error) {
 }
 
 func cmdEnv() {
+	export := false
 	project := ""
-	if len(os.Args) > 2 {
-		project = os.Args[2]
+	for _, arg := range os.Args[2:] {
+		switch {
+		case arg == "--export" || arg == "-e":
+			export = true
+		default:
+			project = arg
+		}
 	}
 
 	baseDir := daemon.DefaultBaseDir()
@@ -209,7 +227,11 @@ func cmdEnv() {
 		os.Exit(1)
 	}
 
-	fmt.Print(env.PrintEndpoints(endpoints))
+	if export {
+		fmt.Print(env.PrintExport(endpoints))
+	} else {
+		fmt.Print(env.PrintEndpoints(endpoints))
+	}
 }
 
 func cmdPs() {
