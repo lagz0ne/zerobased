@@ -34,9 +34,19 @@ type Client struct {
 	cli *client.Client
 }
 
-// New creates a Docker client connected to the local socket.
+// New creates a Docker client connected to the local socket (or DOCKER_HOST env).
 func New() (*Client, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	return NewWithHost("")
+}
+
+// NewWithHost creates a Docker client with an explicit host.
+// Empty host falls back to DOCKER_HOST env / default socket.
+func NewWithHost(host string) (*Client, error) {
+	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	if host != "" {
+		opts = append(opts, client.WithHost(host))
+	}
+	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}

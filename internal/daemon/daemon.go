@@ -39,11 +39,21 @@ type Daemon struct {
 	services map[string][]ServiceEntry // key: container ID
 }
 
-// New creates a daemon with the given socket base directory.
-func New(baseDir string) (*Daemon, error) {
-	dc, err := docker.New()
+// Options configures the daemon.
+type Options struct {
+	BaseDir    string // socket base directory (~/.zerobased/sockets)
+	DockerHost string // custom docker host (empty = default)
+}
+
+// New creates a daemon with the given options.
+func New(opts Options) (*Daemon, error) {
+	dc, err := docker.NewWithHost(opts.DockerHost)
 	if err != nil {
 		return nil, err
+	}
+	baseDir := opts.BaseDir
+	if baseDir == "" {
+		baseDir = DefaultBaseDir()
 	}
 
 	cm := caddy.NewFromWrapper(dc)

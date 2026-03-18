@@ -18,15 +18,40 @@ import (
 	"github.com/lagz0ne/zerobased/internal/run"
 )
 
+// Global flags parsed before subcommand dispatch.
+var dockerHost string
+
 func main() {
 	log.SetFlags(log.Ltime)
 
-	if len(os.Args) < 2 {
+	// Parse global flags before subcommand
+	args := os.Args[1:]
+	for len(args) > 0 {
+		switch {
+		case args[0] == "-H" && len(args) > 1:
+			dockerHost = args[1]
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--docker-host="):
+			dockerHost = strings.TrimPrefix(args[0], "--docker-host=")
+			args = args[1:]
+		case args[0] == "--docker-host" && len(args) > 1:
+			dockerHost = args[1]
+			args = args[2:]
+		default:
+			goto dispatch
+		}
+	}
+
+dispatch:
+	if len(args) == 0 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
+	// Stash remaining args for subcommands
+	os.Args = append([]string{os.Args[0]}, args...)
+
+	switch args[0] {
 	case "start":
 		cmdStart()
 	case "stop":
@@ -42,7 +67,7 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printUsage()
 		os.Exit(1)
 	}
@@ -52,17 +77,26 @@ func printUsage() {
 	fmt.Println(`zerobased — zero-config Docker service router
 
 Usage:
-  zerobased start              Start daemon (watches docker.sock, manages Caddy)
-  zerobased stop               Stop daemon + Caddy + cleanup all sockets
-  zerobased run [name] <cmd>   Wrap dev server, register route, cleanup on exit
-  zerobased env [project]      Print connection strings for a project
-  zerobased ps                 Show all discovered services across all projects
-  zerobased get <service>      Print one connection string`)
+  zerobased [flags] <command> [args...]
+
+Flags:
+  -H, --docker-host <host>   Docker daemon socket (default: $DOCKER_HOST or unix:///var/run/docker.sock)
+
+Commands:
+  start              Start daemon (watches docker.sock, manages Caddy)
+  stop               Stop daemon + Caddy + cleanup all sockets
+  run [name] <cmd>   Wrap dev server, register route, cleanup on exit
+  env [project]      Print connection strings for a project
+  ps                 Show all discovered services across all projects
+  get <service>      Print one connection string`)
 }
 
 func cmdStart() {
-	baseDir := daemon.DefaultBaseDir()
-	d, err := daemon.New(baseDir)
+	opts := daemon.Options{
+		BaseDir:    daemon.DefaultBaseDir(),
+		DockerHost: dockerHost,
+	}
+	d, err := daemon.New(opts)
 	if err != nil {
 		log.Fatalf("init: %v", err)
 	}
@@ -87,8 +121,11 @@ func cmdStart() {
 }
 
 func cmdStop() {
-	baseDir := daemon.DefaultBaseDir()
-	d, err := daemon.New(baseDir)
+	opts := daemon.Options{
+		BaseDir:    daemon.DefaultBaseDir(),
+		DockerHost: dockerHost,
+	}
+	d, err := daemon.New(opts)
 	if err != nil {
 		log.Fatalf("init: %v", err)
 	}
@@ -104,7 +141,6 @@ func cmdRun() {
 		os.Exit(1)
 	}
 
-	// If first arg doesn't look like a command (no / and not in PATH), treat it as the name
 	name := ""
 	cmdArgs := args
 	if len(args) > 1 && !strings.Contains(args[0], "/") {
@@ -121,7 +157,7 @@ func cmdRun() {
 
 // listContainers creates a docker client, lists running compose containers, and returns a cleanup func.
 func listContainers() ([]*docker.ContainerInfo, func(), error) {
-	dc, err := docker.New()
+	dc, err := docker.NewWithHost(dockerHost)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -189,7 +225,6 @@ func cmdPs() {
 		return
 	}
 
-	// Group by project
 	projects := make(map[string][]*docker.ContainerInfo)
 	for _, c := range containers {
 		projects[c.Project] = append(projects[c.Project], c)
