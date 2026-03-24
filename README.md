@@ -48,12 +48,13 @@ zerobased [flags] <command> [args...]
 Flags:
   -H, --docker-host <host>   Docker daemon socket
   --prefix <prefix>          Env var prefix (default: ZB; "" for no prefix)
+  --profile <names>          Route profiles from zerobased.routes.yaml (comma-separated)
 
 Commands:
   start [-d]                               Start daemon (-d for background)
   stop                                     Stop daemon + cleanup
   logs [-f]                                Show daemon logs (-f to follow)
-  run [-p port] [name] <cmd>                Wrap dev server, auto-detect port, register route
+  run [-p port] [name] <cmd>               Wrap dev server, register route
   env [--export] [project]                 Print connection strings
   ps                                       Show all discovered services
   get <service> [-t template] [-v k=v]     Print one connection string
@@ -84,6 +85,53 @@ ZB_POSTGRES_5432=postgresql://postgres@/postgres?host=~/.zerobased/sockets/acoun
 ZB_NATS_4222=localhost:26987
 ZB_NATS_80=http://nats-80.acountee.localhost
 ```
+
+### Path-based routing (routefile)
+
+Drop a `zerobased.routes` file next to your `docker-compose.yml` to get a single gateway with path routing instead of one hostname per service:
+
+```
+# zerobased.routes
+/api     api
+/ws      ws
+/        frontend
+```
+
+This creates `myapp.localhost/api`, `myapp.localhost/ws`, `myapp.localhost/` — each routing to the named docker-compose service. The gateway hostname is derived from your Compose project name.
+
+No routefile = existing hostname-per-service behavior. Nothing breaks.
+
+### Profiles & external upstreams
+
+Use `zerobased.routes.yaml` for profiles with inheritance and external service targets:
+
+```yaml
+# zerobased.routes.yaml
+profiles:
+  default:
+    routes:
+      /api: api
+      /ws: ws
+      /: frontend
+
+  debug:
+    extends: [default]
+    routes:
+      /db: postgres://staging-db.example.com:5432
+
+  staging:
+    extends: [default]
+    routes:
+      /api: https://api.staging.example.com
+      /ws: wss://ws.staging.example.com
+```
+
+```bash
+zerobased start --profile debug          # local app + staging DB
+zerobased start --profile staging,debug  # merge multiple profiles
+```
+
+Supported external targets: `https://`, `wss://`, `postgres://`, `nats://`, `redis://`. Profiles merge left-to-right with last-write-wins on conflicting paths.
 
 ### Connection strings
 

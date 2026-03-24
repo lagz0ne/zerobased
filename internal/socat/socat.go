@@ -3,6 +3,7 @@ package socat
 import (
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 // bridge holds a running Unix→TCP bridge.
 type bridge struct {
 	listener net.Listener
+	target   string
 	done     chan struct{}
 }
 
@@ -32,6 +34,56 @@ func New(baseDir string) *Manager {
 	}
 }
 
+// SweepStale removes all socket files under baseDir that exist on disk
+// but have no active bridge. Called on daemon startup to clean up after crashes.
+func (m *Manager) SweepStale() int {
+	removed := 0
+	entries, err := os.ReadDir(m.baseDir)
+	if err != nil {
+		return 0 // baseDir doesn't exist yet — nothing to sweep
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		projectDir := filepath.Join(m.baseDir, entry.Name())
+		sockets, err := os.ReadDir(projectDir)
+		if err != nil {
+			continue
+		}
+
+		for _, sock := range sockets {
+			sockPath := filepath.Join(projectDir, sock.Name())
+			info, err := os.Lstat(sockPath)
+			if err != nil {
+				continue
+			}
+			// Only remove Unix socket files (mode has ModeSocket bit)
+			if info.Mode()&os.ModeSocket == 0 {
+				continue
+			}
+
+			m.mu.Lock()
+			_, active := m.bridges[sockPath]
+			m.mu.Unlock()
+
+			if !active {
+				os.Remove(sockPath)
+				removed++
+			}
+		}
+
+		// Remove empty project directories
+		remaining, _ := os.ReadDir(projectDir)
+		if len(remaining) == 0 {
+			os.Remove(projectDir)
+		}
+	}
+
+	return removed
+}
+
 // Bridge creates a Unix socket that forwards to a TCP address.
 // socketDir is the project-specific subdirectory (e.g., "acountee").
 // filename is the socket file name (e.g., ".s.PGSQL.5432").
@@ -44,7 +96,16 @@ func (m *Manager) Bridge(socketDir, filename, target string) (string, error) {
 
 	sockPath := filepath.Join(dir, filename)
 
-	// Remove stale socket if it exists
+	// Close existing bridge if we're replacing it (e.g., container IP changed)
+	m.mu.Lock()
+	if old, exists := m.bridges[sockPath]; exists {
+		old.listener.Close()
+		<-old.done
+		delete(m.bridges, sockPath)
+	}
+	m.mu.Unlock()
+
+	// Remove stale socket file
 	os.Remove(sockPath)
 
 	ln, err := net.Listen("unix", sockPath)
@@ -55,7 +116,7 @@ func (m *Manager) Bridge(socketDir, filename, target string) (string, error) {
 	// Make socket world-accessible
 	os.Chmod(sockPath, 0666)
 
-	b := &bridge{listener: ln, done: make(chan struct{})}
+	b := &bridge{listener: ln, target: target, done: make(chan struct{})}
 
 	m.mu.Lock()
 	m.bridges[sockPath] = b
@@ -141,6 +202,53 @@ func (m *Manager) RemoveByPrefix(prefix string) {
 	for _, sockPath := range toRemove {
 		m.Remove(sockPath)
 	}
+}
+
+// CheckHealth verifies all bridges are healthy (socket exists, target reachable).
+// Returns paths of unhealthy bridges that were removed.
+func (m *Manager) CheckHealth() []string {
+	m.mu.Lock()
+	snapshot := make(map[string]*bridge, len(m.bridges))
+	for k, v := range m.bridges {
+		snapshot[k] = v
+	}
+	m.mu.Unlock()
+
+	type result struct {
+		path string
+		ok   bool
+	}
+	ch := make(chan result, len(snapshot))
+
+	for sockPath, b := range snapshot {
+		go func(sp string, br *bridge) {
+			if _, err := os.Lstat(sp); os.IsNotExist(err) {
+				log.Printf("health: socket file missing: %s", sp)
+				ch <- result{sp, false}
+				return
+			}
+			conn, err := net.DialTimeout("tcp", br.target, 2*time.Second)
+			if err != nil {
+				log.Printf("health: target unreachable %s → %s", sp, br.target)
+				ch <- result{sp, false}
+				return
+			}
+			conn.Close()
+			ch <- result{sp, true}
+		}(sockPath, b)
+	}
+
+	var unhealthy []string
+	for range len(snapshot) {
+		if r := <-ch; !r.ok {
+			unhealthy = append(unhealthy, r.path)
+		}
+	}
+
+	for _, sockPath := range unhealthy {
+		m.Remove(sockPath)
+	}
+	return unhealthy
 }
 
 // ListSockets returns all active socket paths.

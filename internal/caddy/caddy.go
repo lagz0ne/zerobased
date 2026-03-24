@@ -35,6 +35,13 @@ func New(docker *client.Client) *Manager {
 	}
 }
 
+// NewHTTPOnly creates a Caddy manager for route operations only (no container lifecycle).
+func NewHTTPOnly() *Manager {
+	return &Manager{
+		http: &http.Client{Timeout: 5 * time.Second},
+	}
+}
+
 // NewFromWrapper creates a Caddy manager from a zerobased docker.Client wrapper.
 func NewFromWrapper(dc interface{ RawClient() *client.Client }) *Manager {
 	return New(dc.RawClient())
@@ -124,6 +131,46 @@ func (m *Manager) AddHTTPRoute(routeID, hostname, upstream string) error {
 	}
 
 	return m.postRoute(route)
+}
+
+// AddPathRoute registers a host + path prefix → upstream reverse proxy route.
+// Routes in the same group are mutually exclusive (first match wins).
+func (m *Manager) AddPathRoute(routeID, gateway, pathPrefix, upstream, group string) error {
+	return m.postRoute(buildRoute(routeID, gateway, pathPrefix, upstream, group, false))
+}
+
+// AddExternalRoute registers a gateway + path → external HTTPS/WSS upstream.
+func (m *Manager) AddExternalRoute(routeID, gateway, pathPrefix, dialAddr, group string) error {
+	return m.postRoute(buildRoute(routeID, gateway, pathPrefix, dialAddr, group, true))
+}
+
+func buildRoute(routeID, gateway, pathPrefix, dialAddr, group string, tls bool) map[string]any {
+	matcher := map[string]any{
+		"host": []string{gateway},
+	}
+	if pathPrefix != "/" {
+		matcher["path"] = []string{pathPrefix + "/*"}
+	}
+
+	handler := map[string]any{
+		"handler": "reverse_proxy",
+		"upstreams": []map[string]string{
+			{"dial": dialAddr},
+		},
+	}
+	if tls {
+		handler["transport"] = map[string]any{
+			"protocol": "http",
+			"tls":      map[string]any{},
+		}
+	}
+
+	return map[string]any{
+		"@id":   routeID,
+		"group": group,
+		"match": []map[string]any{matcher},
+		"handle": []map[string]any{handler},
+	}
 }
 
 // AddTCPRoute registers a listen port → upstream TCP proxy.

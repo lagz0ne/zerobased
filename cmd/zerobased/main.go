@@ -24,6 +24,7 @@ import (
 var (
 	dockerHost string
 	envPrefix  = "ZB" // default prefix for env vars; "" removes prefix
+	profile    string // route profiles (comma-separated)
 )
 
 func main() {
@@ -47,6 +48,12 @@ func main() {
 			args = args[1:]
 		case args[0] == "--prefix" && len(args) > 1:
 			envPrefix = args[1]
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--profile="):
+			profile = strings.TrimPrefix(args[0], "--profile=")
+			args = args[1:]
+		case args[0] == "--profile" && len(args) > 1:
+			profile = args[1]
 			args = args[2:]
 		default:
 			goto dispatch
@@ -95,30 +102,42 @@ Usage:
 Flags:
   -H, --docker-host <host>   Docker daemon socket (default: $DOCKER_HOST or unix:///var/run/docker.sock)
   --prefix <prefix>          Env var prefix (default: ZB → ZB_POSTGRES_5432; "" → POSTGRES_5432)
+  --profile <names>          Route profiles from zerobased.routes.yaml (comma-separated, e.g. staging,debug)
 
 Commands:
-  start [-d]         Start daemon (-d for detached/background mode)
-  stop               Stop daemon + Caddy + cleanup all sockets
-  logs [-f]          Show daemon logs (-f to follow)
-  run [-p port] [name] <cmd>   Wrap dev server, auto-detect port, register route
-  env [--export] [project]   Print connection strings (--export for shell eval)
-  ps                 Show all discovered services across all projects
-  get <service> [-t template] [-v key=val]   Print connection string
+  start [-d]                               Start daemon (-d for background)
+  stop                                     Stop daemon + cleanup
+  logs [-f]                                Show daemon logs (-f to follow)
+  run [-p port] [name] <cmd>               Wrap dev server, register route
+  env [--export] [project]                 Print connection strings
+  ps                                       Show all discovered services
+  get <service> [-t template] [-v k=v]     Print one connection string
+
+Routefile (zerobased.routes — path-based gateway):
+  /api     api               myapp.localhost/api → api container
+  /ws      ws                myapp.localhost/ws  → ws container
+  /        frontend          myapp.localhost/    → frontend container
+
+Routefile with profiles (zerobased.routes.yaml):
+  profiles:
+    default:
+      routes:
+        /api: api
+        /: frontend
+    debug:
+      extends: [default]
+      routes:
+        /db: postgres://staging-db:5432
+
+  External targets: https://, wss://, postgres://, nats://, redis://
+  Usage: zerobased start --profile debug
 
 Templates (zerobased get -t):
-  zerobased get postgres                     Default connection string
-  zerobased get postgres -t '{{socket_dir}}' Just the socket directory
   zerobased get postgres -t 'postgresql://{{user}}:{{pass}}@/{{db}}?host={{socket_dir}}' \
     -v user=postgres -v pass=secret -v db=mydb
-  zerobased get nats -t 'nats://{{host}}:{{port}}'
 
   Variables: project, service, container_port, method, conn, url,
              socket, socket_dir (socket types), host, port (http/port types)
-
-Environment injection (zerobased run):
-  ZB_POSTGRES_5432   postgresql://...?host=~/.zerobased/sockets/acountee
-  ZB_NATS_4222       localhost:26987
-  ZB_NATS_80         http://nats-80.acountee.localhost
 
 Shell eval:
   eval "$(zerobased env --export acountee)"`)
@@ -146,13 +165,14 @@ func cmdStart() {
 	}
 
 	if detached {
-		// Check if already running
+		// Check if already running — validate PID is actually a zerobased process
 		if pid, err := readPID(); err == nil {
-			if process, err := os.FindProcess(pid); err == nil {
-				if err := process.Signal(syscall.Signal(0)); err == nil {
-					log.Fatalf("daemon already running (pid %d)", pid)
-				}
+			if isZerobasedProcess(pid) {
+				log.Fatalf("daemon already running (pid %d)", pid)
 			}
+			// Stale PID file — clean it up
+			os.Remove(pidFile())
+			log.Printf("removed stale pid file (pid %d no longer running)", pid)
 		}
 
 		// Re-exec ourselves without -d, redirecting to log file
@@ -199,6 +219,7 @@ func cmdStart() {
 	opts := daemon.Options{
 		BaseDir:    daemon.DefaultBaseDir(),
 		DockerHost: dockerHost,
+		Profiles:   parseProfiles(),
 	}
 	d, err := daemon.New(opts)
 	if err != nil {
@@ -225,12 +246,16 @@ func cmdStart() {
 }
 
 func cmdStop() {
-	// Kill background daemon if running
+	// Kill background daemon if running — verify it's actually zerobased
 	if pid, err := readPID(); err == nil {
-		if process, err := os.FindProcess(pid); err == nil {
-			if err := process.Signal(syscall.SIGTERM); err == nil {
-				fmt.Printf("sent SIGTERM to daemon (pid %d)\n", pid)
+		if isZerobasedProcess(pid) {
+			if process, err := os.FindProcess(pid); err == nil {
+				if err := process.Signal(syscall.SIGTERM); err == nil {
+					fmt.Printf("sent SIGTERM to daemon (pid %d)\n", pid)
+				}
 			}
+		} else {
+			log.Printf("stale pid file (pid %d is not zerobased), removing", pid)
 		}
 		os.Remove(pidFile())
 	}
@@ -358,6 +383,36 @@ func printLastLines(f *os.File, n int) {
 	io.Copy(os.Stdout, f)
 }
 
+func isZerobasedProcess(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return true // can't read cmdline (not Linux) — assume ours since PID file exists
+	}
+	return strings.Contains(string(cmdline), "zerobased")
+}
+
+// parseProfiles splits the --profile flag into a string slice.
+func parseProfiles() []string {
+	if profile == "" {
+		return nil
+	}
+	var result []string
+	for _, p := range strings.Split(profile, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 func readPID() (int, error) {
 	data, err := os.ReadFile(pidFile())
 	if err != nil {
@@ -405,6 +460,7 @@ func cmdRun() {
 		Port:       port,
 		DockerHost: dockerHost,
 		EnvPrefix:  envPrefix,
+		Profiles:   parseProfiles(),
 	}); err != nil {
 		log.Fatal(err)
 	}

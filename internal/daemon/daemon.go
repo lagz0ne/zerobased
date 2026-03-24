@@ -6,13 +6,16 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/lagz0ne/zerobased/internal/caddy"
 	"github.com/lagz0ne/zerobased/internal/classifier"
 	"github.com/lagz0ne/zerobased/internal/docker"
 	"github.com/lagz0ne/zerobased/internal/env"
 	"github.com/lagz0ne/zerobased/internal/ports"
+	"github.com/lagz0ne/zerobased/internal/routes"
 	"github.com/lagz0ne/zerobased/internal/socat"
 )
 
@@ -30,19 +33,22 @@ type ServiceEntry struct {
 
 // Daemon watches Docker events and manages routing.
 type Daemon struct {
-	docker  *docker.Client
-	caddy   *caddy.Manager
-	socat   *socat.Manager
-	baseDir string // ~/.zerobased/sockets
+	docker   *docker.Client
+	caddy    *caddy.Manager
+	socat    *socat.Manager
+	baseDir  string   // ~/.zerobased/sockets
+	profiles []string // route profiles
 
-	mu       sync.Mutex
-	services map[string][]ServiceEntry // key: container ID
+	mu         sync.Mutex
+	services   map[string][]ServiceEntry // key: container ID
+	routefiles map[string]*routes.File   // key: project name, nil = no routefile
 }
 
 // Options configures the daemon.
 type Options struct {
-	BaseDir    string // socket base directory (~/.zerobased/sockets)
-	DockerHost string // custom docker host (empty = default)
+	BaseDir    string   // socket base directory (~/.zerobased/sockets)
+	DockerHost string   // custom docker host (empty = default)
+	Profiles   []string // route profiles (empty = "default")
 }
 
 // New creates a daemon with the given options.
@@ -64,12 +70,19 @@ func New(opts Options) (*Daemon, error) {
 		caddy:    cm,
 		socat:    sm,
 		baseDir:  baseDir,
-		services: make(map[string][]ServiceEntry),
+		profiles:   opts.Profiles,
+		services:   make(map[string][]ServiceEntry),
+		routefiles: make(map[string]*routes.File),
 	}, nil
 }
 
 // Start begins the daemon: starts Caddy, scans existing containers, then watches events.
 func (d *Daemon) Start(ctx context.Context) error {
+	// Sweep stale sockets left by a previous crash
+	if n := d.socat.SweepStale(); n > 0 {
+		log.Printf("swept %d stale socket(s) from previous run", n)
+	}
+
 	log.Println("starting caddy...")
 	if err := d.caddy.Start(ctx); err != nil {
 		return fmt.Errorf("start caddy: %w", err)
@@ -88,6 +101,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.handleStart(info)
 		}
 	}
+
+	// Start periodic health check for bridges
+	go d.healthLoop(ctx)
 
 	// Watch for new events
 	events, errs := d.docker.Events(ctx)
@@ -153,11 +169,85 @@ func (d *Daemon) Services() map[string][]ServiceEntry {
 	return result
 }
 
+// loadRoutefile loads and caches the routefile for a project.
+// Returns nil if no routefile exists.
+func (d *Daemon) loadRoutefile(info *docker.ContainerInfo) *routes.File {
+	d.mu.Lock()
+	rf, cached := d.routefiles[info.Project]
+	d.mu.Unlock()
+
+	if cached {
+		return rf
+	}
+
+	// Look for zerobased.routes in the compose project working directory
+	workDir := info.Labels["com.docker.compose.project.working_dir"]
+	if workDir == "" {
+		d.mu.Lock()
+		d.routefiles[info.Project] = nil
+		d.mu.Unlock()
+		return nil
+	}
+
+	rf, err := routes.LoadWithProfile(workDir, d.profiles)
+	if err != nil {
+		log.Printf("warning: %s routefile: %v", info.Project, err)
+		rf = nil
+	}
+	if rf != nil {
+		rf.Gateway = fmt.Sprintf("%s.localhost", info.Project)
+		log.Printf("loaded routefile for %s → gateway %s (%d routes)", info.Project, rf.Gateway, len(rf.Entries))
+
+		// Register external routes immediately (they don't depend on containers)
+		d.registerExternalRoutes(rf, info.Project)
+	}
+
+	d.mu.Lock()
+	d.routefiles[info.Project] = rf
+	d.mu.Unlock()
+	return rf
+}
+
+// registerExternalRoutes registers Caddy routes for external targets (https, wss)
+// and socat bridges for external TCP targets (postgres, nats, redis).
+func (d *Daemon) registerExternalRoutes(rf *routes.File, project string) {
+	group := fmt.Sprintf("zb-gw-%s", project)
+
+	for _, entry := range rf.Entries {
+		if !entry.Target.External {
+			continue
+		}
+
+		routeID := fmt.Sprintf("zb-%s-ext-%s", project, strings.ReplaceAll(entry.Path, "/", "_"))
+		dialAddr := fmt.Sprintf("%s:%s", entry.Target.Host, entry.Target.Port)
+
+		switch entry.Target.Scheme {
+		case "https", "wss":
+			if err := d.caddy.AddExternalRoute(routeID, rf.Gateway, entry.Path, dialAddr, group); err != nil {
+				log.Printf("caddy ext %s: %v", routeID, err)
+				continue
+			}
+			log.Printf("  extern  %s → %s%s", entry.Target.Raw, rf.Gateway, entry.Path)
+
+		case "postgres", "nats", "redis":
+			filename := fmt.Sprintf("%s-%s.sock", entry.Target.Scheme, entry.Target.Port)
+			sockPath, err := d.socat.Bridge(project, filename, dialAddr)
+			if err != nil {
+				log.Printf("socat ext %s: %v", routeID, err)
+				continue
+			}
+			log.Printf("  extern  %s → %s", entry.Target.Raw, sockPath)
+		}
+	}
+}
+
 func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 	if info.IP == "" {
 		log.Printf("skip %s/%s: no IP", info.Project, info.Service)
 		return
 	}
+
+	rf := d.loadRoutefile(info)
 
 	var entries []ServiceEntry
 
@@ -196,6 +286,20 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 			log.Printf("  socket  %s/%s:%d → %s", info.Project, info.Service, pb.ContainerPort, ep.ConnString)
 
 		case classifier.HTTP:
+			// If routefile exists and has an entry for this service, use path routing
+			if rf != nil {
+				if re := rf.FindService(info.Service); re != nil {
+					group := fmt.Sprintf("zb-gw-%s", info.Project)
+					if err := d.caddy.AddPathRoute(routeID, rf.Gateway, re.Path, target, group); err != nil {
+						log.Printf("caddy path %s: %v", routeID, err)
+						continue
+					}
+					entry.RouteID = routeID
+					log.Printf("  path    %s/%s:%d → http://%s%s", info.Project, info.Service, pb.ContainerPort, rf.Gateway, re.Path)
+					break
+				}
+			}
+			// Fallback: hostname-based routing (no routefile or service not in routefile)
 			hostname := env.Hostname(info.Project, info.Service, pb.ContainerPort)
 			if err := d.caddy.AddHTTPRoute(routeID, hostname, target); err != nil {
 				log.Printf("caddy http %s: %v", routeID, err)
@@ -237,6 +341,7 @@ func (d *Daemon) handleStop(containerID string) {
 		return
 	}
 
+	project := entries[0].Project
 	for _, entry := range entries {
 		if entry.RouteID != "" {
 			d.caddy.RemoveRoute(entry.RouteID)
@@ -246,7 +351,67 @@ func (d *Daemon) handleStop(containerID string) {
 		}
 		log.Printf("  cleaned %s/%s:%d", entry.Project, entry.Service, entry.ContainerPort)
 	}
+
+	// If no more containers for this project, clear cached routefile
+	if project != "" {
+		d.mu.Lock()
+		hasProject := false
+		for _, svcEntries := range d.services {
+			if len(svcEntries) > 0 && svcEntries[0].Project == project {
+				hasProject = true
+				break
+			}
+		}
+		if !hasProject {
+			delete(d.routefiles, project)
+		}
+		d.mu.Unlock()
+	}
+
 	log.Printf("deregistered %s (%d ports)", containerID[:12], len(entries))
+}
+
+// healthLoop periodically checks bridge health and cleans up broken bridges.
+// When unhealthy bridges are found, the corresponding service entries are removed
+// so they get re-created on the next container start event.
+func (d *Daemon) healthLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			unhealthy := d.socat.CheckHealth()
+			if len(unhealthy) == 0 {
+				continue
+			}
+
+			unhealthySet := make(map[string]bool, len(unhealthy))
+			for _, p := range unhealthy {
+				unhealthySet[p] = true
+			}
+
+			d.mu.Lock()
+			for cid, entries := range d.services {
+				var kept []ServiceEntry
+				for _, e := range entries {
+					if e.SocketPath != "" && unhealthySet[e.SocketPath] {
+						log.Printf("health: removed stale entry %s/%s:%d", e.Project, e.Service, e.ContainerPort)
+						continue
+					}
+					kept = append(kept, e)
+				}
+				if len(kept) == 0 {
+					delete(d.services, cid)
+				} else {
+					d.services[cid] = kept
+				}
+			}
+			d.mu.Unlock()
+		}
+	}
 }
 
 // BaseDir returns the socket base directory.
