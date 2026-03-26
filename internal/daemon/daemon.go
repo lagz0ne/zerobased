@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/lagz0ne/zerobased/internal/caddy"
@@ -42,6 +44,7 @@ type Daemon struct {
 	mu         sync.Mutex
 	services   map[string][]ServiceEntry // key: container ID
 	routefiles map[string]*routes.File   // key: project name, nil = no routefile
+	domains    []DomainEntry             // external domains for multi-domain routing
 }
 
 // Options configures the daemon.
@@ -65,15 +68,17 @@ func New(opts Options) (*Daemon, error) {
 	cm := caddy.NewFromWrapper(dc)
 	sm := socat.New(baseDir)
 
-	return &Daemon{
-		docker:   dc,
-		caddy:    cm,
-		socat:    sm,
-		baseDir:  baseDir,
+	d := &Daemon{
+		docker:     dc,
+		caddy:      cm,
+		socat:      sm,
+		baseDir:    baseDir,
 		profiles:   opts.Profiles,
 		services:   make(map[string][]ServiceEntry),
 		routefiles: make(map[string]*routes.File),
-	}, nil
+	}
+	d.domains = LoadDomains()
+	return d, nil
 }
 
 // Start begins the daemon: starts Caddy, scans existing containers, then watches events.
@@ -102,8 +107,34 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 	}
 
+	// Log domains on start
+	if len(d.domains) > 0 {
+		for i, de := range d.domains {
+			if de.Persistent {
+				log.Printf("domain @%d: %s (persistent)", i+1, de.Domain)
+			} else {
+				log.Printf("domain @%d: %s (%s)", i+1, de.Domain, FormatTTL(de.TTLRemaining()))
+			}
+		}
+	}
+
 	// Start periodic health check for bridges
 	go d.healthLoop(ctx)
+
+	// Handle SIGHUP for domain reload
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-sighup:
+				log.Println("SIGHUP received — reloading domains")
+				d.ReloadDomains()
+			}
+		}
+	}()
 
 	// Watch for new events
 	events, errs := d.docker.Events(ctx)
@@ -144,9 +175,13 @@ func (d *Daemon) Stop(ctx context.Context) {
 	d.services = make(map[string][]ServiceEntry)
 	d.mu.Unlock()
 
+	domains := DomainNames(d.domains)
 	for _, entry := range allEntries {
 		if entry.RouteID != "" {
 			d.caddy.RemoveRoute(entry.RouteID)
+			for _, domain := range domains {
+				d.caddy.RemoveRoute(domainRouteID(entry.RouteID, domain))
+			}
 		}
 	}
 
@@ -296,6 +331,17 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 					}
 					entry.RouteID = routeID
 					log.Printf("  path    %s/%s:%d → http://%s%s", info.Project, info.Service, pb.ContainerPort, rf.Gateway, re.Path)
+					// Register domain variants for path routing
+					for _, de := range d.domains {
+						if de.IsExpired() {
+							continue
+						}
+						extRouteID := domainRouteID(routeID, de.Domain)
+						gateway := env.GatewayForDomain(info.Project, de.Domain)
+						extGroup := fmt.Sprintf("zb-gw-%s-ext-%s", info.Project, de.Domain)
+						d.caddy.AddPathRoute(extRouteID, gateway, re.Path, target, extGroup)
+						log.Printf("  path    %s/%s:%d → http://%s%s (ext)", info.Project, info.Service, pb.ContainerPort, gateway, re.Path)
+					}
 					break
 				}
 			}
@@ -307,6 +353,16 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 			}
 			entry.RouteID = routeID
 			log.Printf("  http    %s/%s:%d → http://%s", info.Project, info.Service, pb.ContainerPort, hostname)
+			// Register domain variants for hostname routing
+			for _, de := range d.domains {
+				if de.IsExpired() {
+					continue
+				}
+				extRouteID := domainRouteID(routeID, de.Domain)
+				extHostname := env.HostnameForDomain(info.Project, info.Service, pb.ContainerPort, de.Domain)
+				d.caddy.AddHTTPRoute(extRouteID, extHostname, target)
+				log.Printf("  http    %s/%s:%d → http://%s (ext)", info.Project, info.Service, pb.ContainerPort, extHostname)
+			}
 
 		case classifier.Port:
 			hashPort := ports.DeterministicPort(info.Project, info.Service, pb.ContainerPort)
@@ -342,9 +398,14 @@ func (d *Daemon) handleStop(containerID string) {
 	}
 
 	project := entries[0].Project
+	domains := DomainNames(d.domains)
 	for _, entry := range entries {
 		if entry.RouteID != "" {
 			d.caddy.RemoveRoute(entry.RouteID)
+			// Clean up domain route variants
+			for _, domain := range domains {
+				d.caddy.RemoveRoute(domainRouteID(entry.RouteID, domain))
+			}
 		}
 		if entry.SocketPath != "" {
 			d.socat.Remove(entry.SocketPath)
@@ -383,6 +444,7 @@ func (d *Daemon) healthLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			d.sweepExpiredDomains()
 			unhealthy := d.socat.CheckHealth()
 			if len(unhealthy) == 0 {
 				continue
@@ -411,6 +473,126 @@ func (d *Daemon) healthLoop(ctx context.Context) {
 			}
 			d.mu.Unlock()
 		}
+	}
+}
+
+// Domains returns a copy of the current domain entries.
+func (d *Daemon) Domains() []DomainEntry {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	result := make([]DomainEntry, len(d.domains))
+	copy(result, d.domains)
+	return result
+}
+
+// ReloadDomains re-reads the domains file and reconciles Caddy routes.
+// Called on SIGHUP from domain add/rm commands.
+func (d *Daemon) ReloadDomains() {
+	newEntries := LoadDomains()
+
+	d.mu.Lock()
+	oldDomains := DomainNames(d.domains)
+	d.domains = newEntries
+	newDomains := DomainNames(d.domains)
+
+	// Collect all current service entries
+	var allEntries []ServiceEntry
+	for _, entries := range d.services {
+		allEntries = append(allEntries, entries...)
+	}
+	// Collect routefiles for path-based routing
+	routefiles := make(map[string]*routes.File, len(d.routefiles))
+	for k, v := range d.routefiles {
+		routefiles[k] = v
+	}
+	d.mu.Unlock()
+
+	// Build sets for diff
+	oldSet := make(map[string]bool, len(oldDomains))
+	for _, d := range oldDomains {
+		oldSet[d] = true
+	}
+	newSet := make(map[string]bool, len(newDomains))
+	for _, d := range newDomains {
+		newSet[d] = true
+	}
+
+	// Deregister routes for removed domains
+	for _, domain := range oldDomains {
+		if newSet[domain] {
+			continue
+		}
+		for _, entry := range allEntries {
+			if entry.RouteID != "" {
+				d.caddy.RemoveRoute(domainRouteID(entry.RouteID, domain))
+			}
+		}
+		// Also remove external route domain variants
+		for project, rf := range routefiles {
+			if rf == nil {
+				continue
+			}
+			for _, re := range rf.Entries {
+				if !re.Target.External {
+					continue
+				}
+				baseID := fmt.Sprintf("zb-%s-ext-%s", project, strings.ReplaceAll(re.Path, "/", "_"))
+				d.caddy.RemoveRoute(domainRouteID(baseID, domain))
+			}
+		}
+		log.Printf("domain removed: %s (routes deregistered)", domain)
+	}
+
+	// Register routes for added domains
+	for _, domain := range newDomains {
+		if oldSet[domain] {
+			continue
+		}
+		for _, entry := range allEntries {
+			if entry.RouteID == "" || entry.Method != classifier.HTTP {
+				continue
+			}
+			target := fmt.Sprintf("%s:%d", entry.IP, entry.ContainerPort)
+			extRouteID := domainRouteID(entry.RouteID, domain)
+
+			rf := routefiles[entry.Project]
+			if rf != nil {
+				if re := rf.FindService(entry.Service); re != nil {
+					gateway := env.GatewayForDomain(entry.Project, domain)
+					group := fmt.Sprintf("zb-gw-%s-ext-%s", entry.Project, domain)
+					d.caddy.AddPathRoute(extRouteID, gateway, re.Path, target, group)
+					continue
+				}
+			}
+			hostname := env.HostnameForDomain(entry.Project, entry.Service, entry.ContainerPort, domain)
+			d.caddy.AddHTTPRoute(extRouteID, hostname, target)
+		}
+		log.Printf("domain added: %s (routes registered for %d services)", domain, len(allEntries))
+	}
+}
+
+// sweepExpiredDomains removes expired domains and their routes.
+func (d *Daemon) sweepExpiredDomains() {
+	removed := SweepExpired()
+	if len(removed) == 0 {
+		return
+	}
+
+	d.mu.Lock()
+	d.domains = LoadDomains()
+	var allEntries []ServiceEntry
+	for _, entries := range d.services {
+		allEntries = append(allEntries, entries...)
+	}
+	d.mu.Unlock()
+
+	for _, domain := range removed {
+		for _, entry := range allEntries {
+			if entry.RouteID != "" {
+				d.caddy.RemoveRoute(domainRouteID(entry.RouteID, domain))
+			}
+		}
+		log.Printf("domain expired: %s (routes cleaned up)", domain)
 	}
 }
 

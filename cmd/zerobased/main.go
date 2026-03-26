@@ -84,6 +84,12 @@ dispatch:
 		cmdPs()
 	case "get":
 		cmdGet()
+	case "domain":
+		cmdDomain()
+	case "share":
+		cmdShare()
+	case "unshare":
+		cmdUnshare()
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -112,6 +118,12 @@ Commands:
   env [--export] [project]                 Print connection strings
   ps                                       Show all discovered services
   get <service> [-t template] [-v k=v]     Print one connection string
+  domain add <domain> [--ttl 2h]           Add external domain (default TTL: 4h)
+  domain add <domain> --persistent         Add domain that never expires
+  domain list                              Show configured domains + TTL
+  domain rm @N                             Remove domain by index
+  share [@N]                               Show shareable URLs for all/one domain
+  unshare @N | --all                       Remove domain(s) + deregister routes
 
 Routefile (zerobased.routes — path-based gateway):
   /api     api               myapp.localhost/api → api container

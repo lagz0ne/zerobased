@@ -127,9 +127,19 @@ func RenderTemplate(tmpl string, vars map[string]string) string {
 	return result
 }
 
-// Hostname returns the HTTP hostname for a service port.
+// HostnameForDomain returns the HTTP hostname for a service port using the given domain.
+func HostnameForDomain(project, service string, containerPort uint16, domain string) string {
+	return fmt.Sprintf("%s-%d.%s.%s", service, containerPort, project, domain)
+}
+
+// Hostname returns the HTTP hostname for a service port (localhost domain).
 func Hostname(project, service string, containerPort uint16) string {
-	return fmt.Sprintf("%s-%d.%s.localhost", service, containerPort, project)
+	return HostnameForDomain(project, service, containerPort, "localhost")
+}
+
+// GatewayForDomain returns the gateway hostname for path-based routing.
+func GatewayForDomain(project, domain string) string {
+	return fmt.Sprintf("%s.%s", project, domain)
 }
 
 // EnvKey returns the environment variable name for an endpoint.

@@ -53,7 +53,7 @@ func Run(opts Options) error {
 		log.Printf("warning: routefile: %v", err)
 	}
 
-	registerFn := buildRegisterFn(cm, routeID, name, cwd, rf)
+	registerFn, registeredDomains := buildRegisterFn(cm, routeID, name, cwd, rf)
 
 	zbEnv := resolveProjectEnv(name, opts.DockerHost, opts.EnvPrefix)
 
@@ -128,10 +128,23 @@ func Run(opts Options) error {
 
 	signal.Stop(sigs)
 	cm.RemoveRoute(routeID)
+	// Clean up exactly the domain routes that were registered
+	for _, domain := range registeredDomains {
+		cm.RemoveRoute(routeID + "@" + domain)
+	}
 	return nil
 }
 
-func buildRegisterFn(cm *caddy.Manager, routeID, name, cwd string, rf *routes.File) func(upstream string) {
+func buildRegisterFn(cm *caddy.Manager, routeID, name, cwd string, rf *routes.File) (func(upstream string), []string) {
+	domains := daemon.LoadDomains()
+	// Capture non-expired domain names for cleanup
+	var domainNames []string
+	for _, de := range domains {
+		if !de.IsExpired() {
+			domainNames = append(domainNames, de.Domain)
+		}
+	}
+
 	if rf != nil {
 		if entry := rf.FindService(name); entry != nil {
 			project := filepath.Base(cwd)
@@ -143,7 +156,18 @@ func buildRegisterFn(cm *caddy.Manager, routeID, name, cwd string, rf *routes.Fi
 				} else {
 					log.Printf("→ http://%s%s", gateway, entry.Path)
 				}
-			}
+				// Register domain variants
+				for _, de := range domains {
+					if de.IsExpired() {
+						continue
+					}
+					extGateway := env.GatewayForDomain(project, de.Domain)
+					extGroup := fmt.Sprintf("zb-gw-%s-ext-%s", project, de.Domain)
+					extID := routeID + "@" + de.Domain
+					cm.AddPathRoute(extID, extGateway, entry.Path, upstream, extGroup)
+					log.Printf("→ http://%s%s (ext)", extGateway, entry.Path)
+				}
+			}, domainNames
 		}
 	}
 	hostname := fmt.Sprintf("%s.localhost", name)
@@ -153,7 +177,17 @@ func buildRegisterFn(cm *caddy.Manager, routeID, name, cwd string, rf *routes.Fi
 		} else {
 			log.Printf("→ http://%s", hostname)
 		}
-	}
+		// Register domain variants
+		for _, de := range domains {
+			if de.IsExpired() {
+				continue
+			}
+			extHostname := env.GatewayForDomain(name, de.Domain)
+			extID := routeID + "@" + de.Domain
+			cm.AddHTTPRoute(extID, extHostname, upstream)
+			log.Printf("→ http://%s (ext)", extHostname)
+		}
+	}, domainNames
 }
 
 func resolveProjectEnv(project, dockerHost, prefix string) []string {
