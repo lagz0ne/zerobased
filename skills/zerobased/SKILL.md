@@ -8,6 +8,7 @@ description: >-
   "what services are running", "set up local dev", "docker compose services",
   "add domain", "list domains", "set up tunnel", "tailscale preview",
   "cloudflare tunnel", "path-based routing", "routefile", "zerobased logs",
+  "stop services", "stop daemon", "inject env vars", "environment variables",
   or when working in a project with docker-compose.yml that needs service routing,
   connection strings, or remote preview sharing via zerobased.
 ---
@@ -31,13 +32,6 @@ If not installed, install via one of:
 
 **Do not proceed with any zerobased command until the binary is confirmed available.** If installation fails, inform the user and suggest alternatives.
 
-## When to Use
-
-Activate zerobased whenever a project uses Docker Compose and needs:
-- Service connection strings (database URLs, HTTP endpoints)
-- Dev server routing with auto-port detection
-- Remote preview sharing with reviewers
-
 ## Core Workflow
 
 ### 1. Start the Daemon
@@ -47,6 +41,8 @@ zerobased start -d    # background mode, auto-follows logs
 ```
 
 The daemon watches Docker events. As containers start/stop, routes register/deregister automatically.
+
+If the daemon fails to start or appears stuck, run `zerobased stop` to clean up, then `zerobased start -d`. The daemon recovers automatically from crashes — stale sockets and routes are swept on startup.
 
 ### 2. Discover Services
 
@@ -68,6 +64,9 @@ zerobased get postgres -t 'postgresql://{{user}}:{{pass}}@/{{db}}?host={{socket_
 
 # Shell eval (inject all as env vars)
 eval "$(zerobased env --export myapp)"
+
+# Custom prefix (APP_POSTGRES_5432 instead of ZB_POSTGRES_5432)
+eval "$(zerobased --prefix APP env --export myapp)"
 ```
 
 Template variables: `project`, `service`, `container_port`, `method`, `conn`, `url`, `socket`, `socket_dir`, `host`, `port`.
@@ -202,7 +201,7 @@ If the tunnel doesn't support wildcard DNS, use a routefile for single-hostname 
 | Method | Ports | Result |
 |--------|-------|--------|
 | Socket | 5432, 3306, 6379, 27017, 4317 | Unix socket at `~/.zerobased/sockets/{project}/` |
-| HTTP | 80, 3000, 5173, 8080, ... | `{service}-{port}.{project}.localhost` |
+| HTTP | 80, 443, 3000, 3001, 4318, 5173, 8000, 8025, 8080, 8222, 8443, 8888, 9090 | `{service}-{port}.{project}.localhost` |
 | Port | everything else | `localhost:{hash_port}` (deterministic FNV-1a) |
 | Internal | 6222, 9222, 7946, 2377 | never exposed |
 
