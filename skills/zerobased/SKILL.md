@@ -2,15 +2,11 @@
 name: zerobased
 version: 1.0.0
 description: >-
-  This skill should be used when the user asks to "start services",
-  "connect to database", "get connection string", "share preview",
-  "share with reviewer", "expose service", "run dev server",
-  "what services are running", "set up local dev", "docker compose services",
-  "add domain", "list domains", "set up tunnel", "tailscale preview",
-  "cloudflare tunnel", "path-based routing", "routefile", "zerobased logs",
-  "stop services", "stop daemon", "inject env vars", "environment variables",
-  or when working in a project with docker-compose.yml that needs service routing,
-  connection strings, or remote preview sharing via zerobased.
+  This skill should be used when the user invokes "/zerobased" or
+  explicitly mentions "zerobased" by name. Provides the CLI reference
+  for zerobased — a zero-config Docker service router that auto-detects
+  containers, generates connection strings, wraps dev servers, and
+  shares live previews with remote reviewers.
 ---
 
 # zerobased — Zero-Config Docker Service Router
