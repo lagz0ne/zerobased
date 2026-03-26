@@ -1,0 +1,7 @@
+{
+  "name": "zerobased",
+  "description": "Zero-config Docker service router — auto-detects containers, creates Unix sockets + HTTP routes, shares previews with remote reviewers",
+  "author": {
+    "name": "lagz0ne"
+  }
+}
