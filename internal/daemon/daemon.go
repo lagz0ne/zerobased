@@ -173,9 +173,8 @@ func (d *Daemon) Stop(ctx context.Context) {
 		allEntries = append(allEntries, entries...)
 	}
 	d.services = make(map[string][]ServiceEntry)
-	d.mu.Unlock()
-
 	domains := DomainNames(d.domains)
+	d.mu.Unlock()
 	for _, entry := range allEntries {
 		if entry.RouteID != "" {
 			d.caddy.RemoveRoute(entry.RouteID)
@@ -284,6 +283,12 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 
 	rf := d.loadRoutefile(info)
 
+	// Snapshot domains under lock to avoid data race with ReloadDomains/sweepExpiredDomains
+	d.mu.Lock()
+	domainSnapshot := make([]DomainEntry, len(d.domains))
+	copy(domainSnapshot, d.domains)
+	d.mu.Unlock()
+
 	var entries []ServiceEntry
 
 	for _, pb := range info.Ports {
@@ -332,7 +337,7 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 					entry.RouteID = routeID
 					log.Printf("  path    %s/%s:%d → http://%s%s", info.Project, info.Service, pb.ContainerPort, rf.Gateway, re.Path)
 					// Register domain variants for path routing
-					for _, de := range d.domains {
+					for _, de := range domainSnapshot {
 						if de.IsExpired() {
 							continue
 						}
@@ -354,7 +359,7 @@ func (d *Daemon) handleStart(info *docker.ContainerInfo) {
 			entry.RouteID = routeID
 			log.Printf("  http    %s/%s:%d → http://%s", info.Project, info.Service, pb.ContainerPort, hostname)
 			// Register domain variants for hostname routing
-			for _, de := range d.domains {
+			for _, de := range domainSnapshot {
 				if de.IsExpired() {
 					continue
 				}
@@ -391,6 +396,7 @@ func (d *Daemon) handleStop(containerID string) {
 	if ok {
 		delete(d.services, containerID)
 	}
+	domains := DomainNames(d.domains)
 	d.mu.Unlock()
 
 	if !ok {
@@ -398,7 +404,6 @@ func (d *Daemon) handleStop(containerID string) {
 	}
 
 	project := entries[0].Project
-	domains := DomainNames(d.domains)
 	for _, entry := range entries {
 		if entry.RouteID != "" {
 			d.caddy.RemoveRoute(entry.RouteID)
@@ -500,21 +505,17 @@ func (d *Daemon) ReloadDomains() {
 	for _, entries := range d.services {
 		allEntries = append(allEntries, entries...)
 	}
-	// Collect routefiles for path-based routing
-	routefiles := make(map[string]*routes.File, len(d.routefiles))
-	for k, v := range d.routefiles {
-		routefiles[k] = v
-	}
+	routefiles := d.routefiles
 	d.mu.Unlock()
 
 	// Build sets for diff
 	oldSet := make(map[string]bool, len(oldDomains))
-	for _, d := range oldDomains {
-		oldSet[d] = true
+	for _, dom := range oldDomains {
+		oldSet[dom] = true
 	}
 	newSet := make(map[string]bool, len(newDomains))
-	for _, d := range newDomains {
-		newSet[d] = true
+	for _, dom := range newDomains {
+		newSet[dom] = true
 	}
 
 	// Deregister routes for removed domains
@@ -525,19 +526,6 @@ func (d *Daemon) ReloadDomains() {
 		for _, entry := range allEntries {
 			if entry.RouteID != "" {
 				d.caddy.RemoveRoute(domainRouteID(entry.RouteID, domain))
-			}
-		}
-		// Also remove external route domain variants
-		for project, rf := range routefiles {
-			if rf == nil {
-				continue
-			}
-			for _, re := range rf.Entries {
-				if !re.Target.External {
-					continue
-				}
-				baseID := fmt.Sprintf("zb-%s-ext-%s", project, strings.ReplaceAll(re.Path, "/", "_"))
-				d.caddy.RemoveRoute(domainRouteID(baseID, domain))
 			}
 		}
 		log.Printf("domain removed: %s (routes deregistered)", domain)
