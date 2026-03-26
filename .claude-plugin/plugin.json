@@ -1,7 +1,12 @@
 {
   "name": "zerobased",
+  "version": "1.0.0",
   "description": "Zero-config Docker service router — auto-detects containers, creates Unix sockets + HTTP routes, shares previews with remote reviewers",
   "author": {
-    "name": "lagz0ne"
-  }
+    "name": "lagz0ne",
+    "url": "https://github.com/lagz0ne"
+  },
+  "repository": "https://github.com/lagz0ne/zerobased",
+  "homepage": "https://github.com/lagz0ne/zerobased",
+  "keywords": ["docker", "service-discovery", "routing", "preview-sharing", "dev-tools"]
 }

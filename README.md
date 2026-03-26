@@ -58,6 +58,12 @@ Commands:
   env [--export] [project]                 Print connection strings
   ps                                       Show all discovered services
   get <service> [-t template] [-v k=v]     Print one connection string
+  domain add <domain> [--ttl 2h]           Add external domain (default TTL: 4h)
+  domain add <domain> --persistent         Add domain that never expires
+  domain list                              Show configured domains + TTL
+  domain rm @N                             Remove domain by index
+  share [@N]                               Show shareable URLs for all/one domain
+  unshare @N | --all                       Remove domain(s) + deregister routes
 ```
 
 ### Daemon
@@ -168,6 +174,60 @@ echo $APP_POSTGRES_5432
 eval "$(zerobased --prefix '' env --export acountee)"
 echo $POSTGRES_5432
 ```
+
+### Remote preview sharing
+
+Share live previews with reviewers when working on a remote machine (behind Tailscale or Cloudflare Tunnel):
+
+```bash
+# Add an external domain (default 4h TTL, auto-cleans)
+zerobased domain add preview.dev.co
+
+# Custom TTL or persistent
+zerobased domain add preview.dev.co --ttl 30m
+zerobased domain add box.ts.net --persistent
+
+# See all shareable URLs
+zerobased share
+
+# Filter by domain
+zerobased share @1
+
+# Clean up
+zerobased unshare @1        # remove one domain
+zerobased unshare --all     # remove all domains
+```
+
+All services are automatically exposed on every configured domain. Routes are registered for `localhost` + all domains simultaneously — local dev keeps working.
+
+**Tailscale:**
+```bash
+tailscale serve --bg --https=443 80
+zerobased domain add $(tailscale status --json | jq -r .Self.DNSName | sed 's/\.$//')
+```
+
+**Cloudflare Tunnel** (with wildcard DNS for `*.preview.yourdomain.com`):
+```bash
+cloudflared tunnel run dev-preview
+zerobased domain add preview.yourdomain.com
+```
+
+**No tunnel** (direct IP via nip.io):
+```bash
+zerobased domain add 10.0.1.50.nip.io
+```
+
+## Claude Code plugin
+
+zerobased ships as a Claude Code plugin — gives Claude procedural knowledge for service discovery, connection strings, dev server wrapping, and remote preview sharing.
+
+```bash
+# Install as marketplace
+claude plugin marketplace add lagz0ne/zerobased
+claude plugin install zerobased@zerobased
+```
+
+Triggers on: "start services", "connect to database", "get connection string", "share preview", "run dev server", "add domain", "set up tunnel", and any project with `docker-compose.yml`.
 
 ## How it works
 
