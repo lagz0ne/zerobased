@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -23,22 +24,29 @@ const (
 
 // Manager manages the Caddy container and its admin API for route registration.
 type Manager struct {
-	docker *client.Client
-	http   *http.Client
+	docker  *client.Client
+	http    *http.Client
+	baseURL string
+}
+
+func (m *Manager) url(path string) string {
+	return m.baseURL + path
 }
 
 // New creates a Caddy manager. Accepts the raw Docker SDK client.
 func New(docker *client.Client) *Manager {
 	return &Manager{
-		docker: docker,
-		http:   &http.Client{Timeout: 5 * time.Second},
+		docker:  docker,
+		http:    &http.Client{Timeout: 5 * time.Second},
+		baseURL: AdminAddr,
 	}
 }
 
 // NewHTTPOnly creates a Caddy manager for route operations only (no container lifecycle).
 func NewHTTPOnly() *Manager {
 	return &Manager{
-		http: &http.Client{Timeout: 5 * time.Second},
+		http:    &http.Client{Timeout: 5 * time.Second},
+		baseURL: AdminAddr,
 	}
 }
 
@@ -95,7 +103,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Wait for admin API to be ready (check first, sleep after)
 	for i := 0; i < 30; i++ {
-		r, err := m.http.Get(AdminAddr + "/config/")
+		r, err := m.http.Get(m.url("/config/"))
 		if err == nil {
 			r.Body.Close()
 			return nil
@@ -199,7 +207,7 @@ func (m *Manager) AddTCPRoute(routeID string, listenPort uint16, upstream string
 
 // RemoveRoute removes a route by its ID.
 func (m *Manager) RemoveRoute(routeID string) error {
-	req, err := http.NewRequest("DELETE", AdminAddr+"/id/"+routeID, nil)
+	req, err := http.NewRequest("DELETE", m.url("/id/")+routeID, nil)
 	if err != nil {
 		return err
 	}
@@ -217,11 +225,9 @@ func (m *Manager) postRoute(route map[string]any) error {
 		return err
 	}
 
-	resp, err := m.http.Post(
-		AdminAddr+"/config/apps/http/servers/zerobased/routes",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	url := m.url("/config/apps/http/servers/zerobased/routes")
+
+	resp, err := m.http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("add route: %w", err)
 	}
@@ -229,23 +235,62 @@ func (m *Manager) postRoute(route map[string]any) error {
 
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("caddy API %d: %s", resp.StatusCode, b)
+		errMsg := string(b)
+
+		if resp.StatusCode == 500 && strings.Contains(errMsg, "invalid traversal") {
+			if err := m.ensureServerConfig(); err != nil {
+				return fmt.Errorf("bootstrap server config: %w", err)
+			}
+			resp2, err := m.http.Post(url, "application/json", bytes.NewReader(body))
+			if err != nil {
+				return fmt.Errorf("add route after bootstrap: %w", err)
+			}
+			defer resp2.Body.Close()
+			if resp2.StatusCode >= 400 {
+				b2, _ := io.ReadAll(resp2.Body)
+				return fmt.Errorf("caddy API %d: %s", resp2.StatusCode, b2)
+			}
+			return nil
+		}
+
+		return fmt.Errorf("caddy API %d: %s", resp.StatusCode, errMsg)
 	}
 	return nil
 }
 
-// EnsureHTTPServer creates the base HTTP server config if it doesn't exist.
-func (m *Manager) EnsureHTTPServer() error {
-	server := map[string]any{
+func defaultServer() map[string]any {
+	return map[string]any{
 		"listen": []string{":80"},
 		"routes": []any{},
 	}
+}
 
+// ensureServerConfig creates the zerobased HTTP server non-destructively.
+// Tries PUT first (preserves existing config), falls back to /load.
+func (m *Manager) ensureServerConfig() error {
+	body, _ := json.Marshal(defaultServer())
+	req, err := http.NewRequest("PUT", m.url("/config/apps/http/servers/zerobased"), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := m.http.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode < 400 {
+			return nil
+		}
+	}
+	return m.EnsureHTTPServer()
+}
+
+// EnsureHTTPServer creates the base HTTP server config, replacing the entire Caddy config.
+func (m *Manager) EnsureHTTPServer() error {
 	body, err := json.Marshal(map[string]any{
 		"apps": map[string]any{
 			"http": map[string]any{
 				"servers": map[string]any{
-					"zerobased": server,
+					"zerobased": defaultServer(),
 				},
 			},
 		},
@@ -254,7 +299,7 @@ func (m *Manager) EnsureHTTPServer() error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", AdminAddr+"/load", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", m.url("/load"), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
