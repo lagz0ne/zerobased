@@ -1,2 +1,9 @@
 bin/
 dist/
+/zerobased
+*.tgz
+npm/linux-x64/zerobased
+npm/linux-arm64/zerobased
+npm/darwin-x64/zerobased
+npm/darwin-arm64/zerobased
+npm/zerobased/README.md

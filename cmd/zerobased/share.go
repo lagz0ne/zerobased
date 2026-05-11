@@ -15,8 +15,12 @@ import (
 
 func cmdDomain() {
 	args := os.Args[2:]
+	if len(args) > 0 && isHelp(args[0]) {
+		printCommandHelp("domain")
+		return
+	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased domain <add|rm|list> [args...]")
+		printCommandHelp("domain")
 		os.Exit(1)
 	}
 
@@ -29,13 +33,14 @@ func cmdDomain() {
 		cmdDomainList()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown domain subcommand: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "next: run `zerobased help domain`")
 		os.Exit(1)
 	}
 }
 
 func cmdDomainAdd(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased domain add <domain> [--ttl <duration>] [--persistent]")
+		printCommandHelp("domain")
 		os.Exit(1)
 	}
 
@@ -68,7 +73,7 @@ func cmdDomainAdd(args []string) {
 	}
 
 	if domain == "" {
-		fmt.Fprintln(os.Stderr, "usage: zerobased domain add <domain> [--ttl <duration>] [--persistent]")
+		printCommandHelp("domain")
 		os.Exit(1)
 	}
 
@@ -89,7 +94,7 @@ func cmdDomainAdd(args []string) {
 
 func cmdDomainRm(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased domain rm @N")
+		printCommandHelp("domain")
 		os.Exit(1)
 	}
 
@@ -103,6 +108,7 @@ func cmdDomainRm(args []string) {
 	idx := daemon.ParseDomainRef(args[0])
 	if idx == 0 {
 		fmt.Fprintf(os.Stderr, "invalid domain ref %q — use @N (e.g., @1)\n", args[0])
+		fmt.Fprintln(os.Stderr, "next: run `zerobased domain list`")
 		os.Exit(1)
 	}
 
@@ -118,6 +124,7 @@ func cmdDomainList() {
 	entries := daemon.LoadDomains()
 	if len(entries) == 0 {
 		fmt.Println("no domains configured")
+		fmt.Println("next: run `zerobased domain add <domain>`")
 		return
 	}
 
@@ -134,6 +141,10 @@ func cmdDomainList() {
 
 func cmdShare() {
 	args := os.Args[2:]
+	if len(args) > 0 && isHelp(args[0]) {
+		printCommandHelp("share")
+		return
+	}
 
 	// Parse optional @N filter
 	var filterIdx int
@@ -143,7 +154,8 @@ func cmdShare() {
 
 	entries := daemon.LoadDomains()
 	if len(entries) == 0 {
-		fmt.Println("no domains configured — use: zerobased domain add <domain>")
+		fmt.Println("no domains configured")
+		fmt.Println("next: run `zerobased domain add <domain>`")
 		return
 	}
 
@@ -164,6 +176,7 @@ func cmdShare() {
 	endpoints := env.EndpointsFromContainers(daemon.DefaultBaseDir(), containers, "")
 	if len(endpoints) == 0 {
 		fmt.Println("no services running")
+		fmt.Println("next: run `zerobased start -d`, then `docker compose up -d`, then `zerobased share`")
 		return
 	}
 
@@ -211,8 +224,12 @@ func cmdShare() {
 
 func cmdUnshare() {
 	args := os.Args[2:]
+	if len(args) > 0 && isHelp(args[0]) {
+		printCommandHelp("unshare")
+		return
+	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased unshare @N | --all")
+		printCommandHelp("unshare")
 		os.Exit(1)
 	}
 
@@ -226,6 +243,7 @@ func cmdUnshare() {
 	idx := daemon.ParseDomainRef(args[0])
 	if idx == 0 {
 		fmt.Fprintf(os.Stderr, "invalid ref %q — use @N (e.g., @1) or --all\n", args[0])
+		fmt.Fprintln(os.Stderr, "next: run `zerobased domain list`")
 		os.Exit(1)
 	}
 
@@ -254,4 +272,3 @@ func signalDaemon() {
 		log.Printf("signaled daemon (pid %d) to reload domains", pid)
 	}
 }
-

@@ -51,6 +51,8 @@ Flags:
   --profile <names>          Route profiles from zerobased.routes.yaml (comma-separated)
 
 Commands:
+  help [command]                           Show guided help
+  version                                  Print build version
   start [-d]                               Start daemon (-d for background)
   stop                                     Stop daemon + cleanup
   logs [-f]                                Show daemon logs (-f to follow)
@@ -64,6 +66,23 @@ Commands:
   domain rm @N                             Remove domain by index
   share [@N]                               Show shareable URLs for all/one domain
   unshare @N | --all                       Remove domain(s) + deregister routes
+```
+
+Every command supports a guided help path:
+
+```bash
+zerobased help
+zerobased help run
+zerobased help domain
+```
+
+If you are driving zerobased from an LLM or automation, this sequence is the safest starting point:
+
+```bash
+zerobased start -d
+docker compose up -d
+zerobased ps
+zerobased get <service>
 ```
 
 ### Daemon
@@ -175,6 +194,251 @@ eval "$(zerobased --prefix '' env --export acountee)"
 echo $POSTGRES_5432
 ```
 
+## Portless service fabric
+
+Status: planned runtime behavior. The pure contracts live in `internal/fabric`; CLI and daemon wiring are still future work. Do not present `zerobased up` or `zerobased.yaml` as released product behavior yet.
+
+The goal is to remove port choice from normal local development. Users and agents name services. Zerobased leases private endpoints, injects them into processes or containers, probes readiness, exposes stable names, and cleans residue by lease.
+
+The important inversion: zerobased should assign and inject private endpoints before the process starts. The app can use random private ports or sockets. Zerobased organizes them with env aliases and proxies. The fabric should not guess ports from stdout after startup.
+
+### Intended usage
+
+Create `zerobased.yaml`:
+
+```yaml
+identity:
+  app: billing
+  port_range: 42000-49999
+
+ports:
+  db:
+    mode: tcp
+    port: 5432
+  api: http
+  web: http
+
+profiles:
+  local:
+    db.url: "postgres://localhost:{{db.port}}/app"
+  staging:
+    disable: [db]
+    required: [db.url]
+
+services:
+  db:
+    cmd: docker compose up db
+    endpoint: env_port
+    env:
+      DB_PORT: "{{db.port}}"
+    source:
+      probe:
+        http:
+          port: db
+          path: /health
+          expect_status: 200
+          expect_header: X-ZB-Service=db
+      found: use
+      missing: start
+    ready:
+      tcp: db
+  api:
+    cmd: go run ./cmd/api
+    needs:
+      db: required
+    env:
+      HOST: "{{api.bind_host}}"
+      PORT: "{{api.port}}"
+      DATABASE_URL: "{{db.url}}"
+      AUTH_CALLBACK_URL: "{{api.url}}/auth/callback"
+    ready:
+      http: /health
+  web:
+    cmd: pnpm dev
+    needs:
+      api: required
+    env:
+      HOST: "{{web.bind_host}}"
+      PORT: "{{web.port}}"
+      API_URL: "{{api.url}}"
+      CSP_CONNECT_SRC: "{{api.url}}"
+
+routes:
+  app:
+    visibility: public
+    /api/*: api
+    /ws/*: api
+    /*: web
+  internal:
+    visibility: internal
+    /metrics: api
+```
+
+Run it:
+
+```bash
+zerobased up
+zerobased up --profile staging --set db.url="$STAGING_DATABASE_URL"
+zerobased ps
+zerobased get api
+zerobased env --export
+```
+
+Expected user-facing output:
+
+```text
+web.<branch>.<repo>.localhost
+api.<branch>.<repo>.localhost
+app.<branch>.<repo>.localhost/api
+app.<branch>.<repo>.localhost/
+```
+
+Expected injected env:
+
+```bash
+HOST=127.0.0.1
+PORT=<private-os-assigned-port>
+API_URL=http://api.<branch-or-worktree>.<repo>.localhost
+DATABASE_URL=postgres://localhost:5432/app
+ZB_SERVICE_MAP=<json>
+```
+
+The short form expands to:
+
+- `ports` declares named private connection points
+- fixed ports are explicit constraints
+- service `source` decides how an existing fixed endpoint may be used; `found: use` requires identity proof unless an explicit escape hatch is set
+- `profiles` rewires values for local, staging, test, or CI
+- `services.*.env` says how each process receives connection values
+- Go templates turn endpoint facts into env values
+- app-specific connection strings come from templates, not type-specific magic
+- `routes` names final user-facing app surfaces; domains are generated from route name, branch-or-worktree, repo, and configured domain
+- route `visibility` is canonical: `internal` means loopback/private only, no external domain expansion, no share output
+- each service still gets its own host: `api.<branch-or-worktree>.<repo>.localhost`
+
+Do not build new workflows around `localhost:<port>`. Numeric ports are private implementation detail. If a tool needs a port, zerobased must inject it before start through env, flags, listener handoff, or an adapter.
+
+### Namespaces
+
+Each service identity is derived from:
+
+```text
+repo + branch-or-worktree + service
+```
+
+That makes parallel branches and agent worktrees safe. Two branches running the same `api` service should get different host labels without user-selected ports.
+
+Example shapes:
+
+```text
+api.<branch-or-worktree-label>.<repo-label>.localhost
+app.<branch-or-worktree-label>.<repo-label>.localhost
+```
+
+Labels are URL-safe and collision-resistant. Conflicts should be visible, not silently overwritten.
+
+### Endpoint policy
+
+Zerobased should pick the strongest endpoint mechanism the service supports:
+
+| Policy | Class | Meaning |
+|---|---|---|
+| `unix_socket` | normal | Use a Unix socket when the protocol supports it |
+| `listener_handoff` | normal | Hand an already-bound listener to the process; fallback defaults to fail |
+| `env_port` | normal | Lease a deterministic candidate, recheck before start, then inject `PORT` and `HOST` |
+| `env_flag` | normal | Inject framework-specific flags |
+
+Unsupported tools need adapters, not post-start guessing. An adapter may extract a port setting from a known config file or command shape, then rewrite/inject it before the process starts.
+
+Adapter example:
+
+```yaml
+services:
+  vite_app: pnpm vite --host $HOST --port $PORT
+```
+
+If zerobased cannot control a service endpoint before start, startup should fail with adapter guidance instead of falling back to stdout parsing.
+
+### Env aliases and proxies
+
+Processes should consume named aliases, not private endpoints:
+
+```text
+API_URL=http://api.<branch-or-worktree>.<repo>.localhost
+DATABASE_URL=postgresql://postgres@/app?host=<endpoint-dir>
+ZB_SERVICE_MAP=<machine-readable service map>
+```
+
+Proxy type depends on service kind:
+
+| Proxy type | Use |
+|---|---|
+| HTTP host | browser apps and APIs |
+| HTTP path | one gateway with `/api`, `/ws`, `/` |
+| Unix socket | databases and local-only protocols |
+| TCP bridge | protocols without socket support |
+
+### Lifecycle
+
+Runtime state must separate process start from readiness:
+
+```text
+waiting_for_deps -> starting -> probing -> ready
+                              -> degraded
+                              -> failed
+```
+
+Other cleanup states:
+
+```text
+stopping -> released -> pruned
+crash/deleted/expired -> orphaned -> pruned
+```
+
+`ready` only means a probe passed. A running process is not enough.
+
+### Cleanup
+
+Every private endpoint has a lease owner:
+
+| Owner | Example |
+|---|---|
+| `daemon_session` | gateway-owned endpoint |
+| `wrapped_pid` | host command started by zerobased |
+| `docker_container` | discovered Docker container |
+| `compose_service` | Compose service abstraction |
+
+Cleanup should be reviewable before destructive action:
+
+```bash
+zerobased prune --dry-run
+zerobased prune
+zerobased clean
+```
+
+Expected behavior:
+
+| Event | First action | Later action |
+|---|---|---|
+| clean stop | release lease | prune residue |
+| crash | mark orphaned | prune after review |
+| expired lease | mark orphaned | prune |
+| deleted worktree | mark orphaned | prune |
+| gateway restart | rebuild ready/degraded routes | keep failed/orphaned hidden |
+
+### Verification target
+
+The portless fabric is not done until these user-visible checks pass:
+
+| Impact | Proof |
+|---|---|
+| No normal port conflicts | Two worktrees run the same service without choosing ports |
+| Docker and host commands share names | `ps`, `get`, and URLs show both kinds together |
+| Dependencies wait correctly | Dependent services stay blocked until upstream probes pass |
+| Stale state is repairable | Crashed processes become orphaned and prune explains cleanup |
+| Gateway recovers | Restarted gateway rebuilds ready/degraded routes from leases |
+| No post-start guessing | Endpoint is assigned before process start; unsupported tools fail with adapter guidance |
+
 ### Remote preview sharing
 
 Share live previews with reviewers when working on a remote machine (behind Tailscale or Cloudflare Tunnel):
@@ -272,6 +536,59 @@ Different Compose projects get different namespaces automatically. Run multiple 
 
 - Docker with Compose
 - Linux or macOS (host must be able to reach container IPs directly)
+
+## Release process
+
+Releases are tag-driven. Pushing `v*` runs `.github/workflows/release.yml`.
+
+Before tagging:
+
+```bash
+go test ./...
+go build -ldflags "-s -w -X main.version=0.1.0-preflight" -o /tmp/zerobased ./cmd/zerobased
+/tmp/zerobased help
+/tmp/zerobased version
+make cross
+make npm
+```
+
+Release checklist:
+
+1. Ensure `NPM_TOKEN` is configured in GitHub Actions secrets.
+2. Pick a semver tag, for example `v0.1.0`.
+3. Push the tag:
+
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+4. GitHub Actions builds:
+   - `linux/amd64`
+   - `linux/arm64`
+   - `darwin/amd64`
+   - `darwin/arm64`
+
+5. The release job creates the GitHub Release from `dist/*`.
+   If the GitHub Release already exists for the tag, the workflow uploads assets with `--clobber` instead of failing.
+6. The npm job publishes platform packages first, then the `zerobased` wrapper package.
+7. Smoke test after publish:
+
+   ```bash
+   npm install -g zerobased
+   zerobased version
+   zerobased help
+   ```
+
+Current npm package layout:
+
+| Package | Purpose |
+| --- | --- |
+| `zerobased` | wrapper package with `postinstall` binary copy |
+| `@lagz0ne/zerobased-linux-x64` | Linux x64 binary |
+| `@lagz0ne/zerobased-linux-arm64` | Linux arm64 binary |
+| `@lagz0ne/zerobased-darwin-x64` | macOS Intel binary |
+| `@lagz0ne/zerobased-darwin-arm64` | macOS Apple Silicon binary |
 
 ## License
 

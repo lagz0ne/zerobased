@@ -23,12 +23,12 @@ clean:
 
 cross: clean
 	@mkdir -p dist
-	@for platform in $(PLATFORMS); do \
+	@set -e; for platform in $(PLATFORMS); do \
 		os=$$(echo $$platform | cut -d/ -f1); \
 		arch=$$(echo $$platform | cut -d/ -f2); \
 		output=dist/$(BINARY)-$$os-$$arch; \
 		echo "building $$platform → $$output"; \
-		GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o $$output ./cmd/zerobased; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build $(LDFLAGS) -o $$output ./cmd/zerobased; \
 	done
 
 npm: cross
@@ -37,4 +37,5 @@ npm: cross
 	@cp dist/$(BINARY)-linux-arm64 npm/linux-arm64/$(BINARY)
 	@cp dist/$(BINARY)-darwin-arm64 npm/darwin-arm64/$(BINARY)
 	@cp dist/$(BINARY)-darwin-amd64 npm/darwin-x64/$(BINARY)
+	@cp README.md npm/zerobased/README.md
 	@echo "done — run 'npm publish' in each npm/ subdirectory"

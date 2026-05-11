@@ -25,6 +25,7 @@ var (
 	dockerHost string
 	envPrefix  = "ZB" // default prefix for env vars; "" removes prefix
 	profile    string // route profiles (comma-separated)
+	version    = "dev"
 )
 
 func main() {
@@ -62,7 +63,7 @@ func main() {
 
 dispatch:
 	if len(args) == 0 {
-		printUsage()
+		printUsage(nil)
 		os.Exit(1)
 	}
 
@@ -90,16 +91,22 @@ dispatch:
 		cmdShare()
 	case "unshare":
 		cmdUnshare()
+	case "version":
+		fmt.Println(version)
 	case "help", "--help", "-h":
-		printUsage()
+		printUsage(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
-		printUsage()
+		fmt.Fprintln(os.Stderr, "next: run `zerobased help` or `zerobased help <command>`")
 		os.Exit(1)
 	}
 }
 
-func printUsage() {
+func printUsage(args []string) {
+	if len(args) > 0 {
+		printCommandHelp(args[0])
+		return
+	}
 	fmt.Println(`zerobased — zero-config Docker service router
 
 Usage:
@@ -111,6 +118,8 @@ Flags:
   --profile <names>          Route profiles from zerobased.routes.yaml (comma-separated, e.g. staging,debug)
 
 Commands:
+  help [command]                           Show guided help
+  version                                  Print build version
   start [-d]                               Start daemon (-d for background)
   stop                                     Stop daemon + cleanup
   logs [-f]                                Show daemon logs (-f to follow)
@@ -124,6 +133,17 @@ Commands:
   domain rm @N                             Remove domain by index
   share [@N]                               Show shareable URLs for all/one domain
   unshare @N | --all                       Remove domain(s) + deregister routes
+
+Fast path:
+  1. zerobased start -d
+  2. docker compose up -d
+  3. zerobased ps
+  4. zerobased get <service>        # or: eval "$(zerobased env --export <project>)"
+
+If stuck:
+  zerobased logs -f                  # daemon diagnostics
+  zerobased stop && zerobased start -d
+  zerobased help <command>
 
 Routefile (zerobased.routes — path-based gateway):
   /api     api               myapp.localhost/api → api container
@@ -155,6 +175,131 @@ Shell eval:
   eval "$(zerobased env --export acountee)"`)
 }
 
+func printCommandHelp(command string) {
+	switch command {
+	case "start":
+		fmt.Println(`Usage: zerobased start [-d]
+
+Start the Docker-watching daemon and local Caddy gateway.
+
+Examples:
+  zerobased start              # foreground
+  zerobased start -d           # background, then follow logs
+
+Next:
+  docker compose up -d
+  zerobased ps
+  zerobased logs -f`)
+	case "stop":
+		fmt.Println(`Usage: zerobased stop
+
+Stop the daemon, remove Caddy routes, and clean zerobased-managed sockets.
+
+Next:
+  zerobased start -d           # start clean again
+  zerobased logs               # inspect previous run`)
+	case "logs":
+		fmt.Println(`Usage: zerobased logs [-f] [-n lines]
+
+Show daemon logs.
+
+Examples:
+  zerobased logs
+  zerobased logs -f
+  zerobased logs -n 200`)
+	case "run":
+		fmt.Println(`Usage: zerobased run [-p port] [name] <command> [args...]
+
+Wrap a host dev server, register a route, inject ZB_* env vars, and clean up on exit.
+
+Examples:
+  zerobased run web pnpm dev
+  zerobased run -p 3000 web pnpm dev
+
+Next:
+  zerobased ps
+  zerobased get <service>`)
+	case "env":
+		fmt.Println(`Usage: zerobased env [--export] [project]
+
+Print all discovered connection strings, optionally as shell exports.
+
+Examples:
+  zerobased env
+  zerobased env acountee
+  eval "$(zerobased env --export acountee)"
+
+Next:
+  zerobased ps                  # find project/service names
+  zerobased get <service>`)
+	case "ps":
+		fmt.Println(`Usage: zerobased ps
+
+Show all discovered Docker Compose services and their connection strings.
+
+If empty:
+  zerobased start -d
+  docker compose up -d
+  zerobased logs -f`)
+	case "get":
+		fmt.Println(`Usage: zerobased get <service> [-t template] [-v key=val]...
+
+Print one connection string. Use templates for app-specific URLs.
+
+Examples:
+  zerobased get postgres
+  zerobased get postgres -t 'postgresql://{{user}}:{{pass}}@/{{db}}?host={{socket_dir}}' \
+    -v user=postgres -v pass=secret -v db=mydb
+
+Next:
+  zerobased ps                  # find service names
+  zerobased env --export <project>`)
+	case "domain":
+		fmt.Println(`Usage:
+  zerobased domain add <domain> [--ttl 2h]
+  zerobased domain add <domain> --persistent
+  zerobased domain list
+  zerobased domain rm @N
+
+Add external domains for shareable preview URLs.
+
+Next:
+  zerobased share
+  zerobased unshare @N`)
+	case "share":
+		fmt.Println(`Usage: zerobased share [@N]
+
+Show shareable URLs for configured external domains.
+
+If no domains:
+  zerobased domain add <domain>
+
+If no services:
+  zerobased start -d
+  docker compose up -d`)
+	case "unshare":
+		fmt.Println(`Usage: zerobased unshare @N | --all
+
+Remove configured external domains and deregister their routes.
+
+Next:
+  zerobased domain list
+  zerobased share`)
+	case "version":
+		fmt.Println(`Usage: zerobased version
+
+Print the build version embedded by release builds.`)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown help topic: %s\n", command)
+		fmt.Fprintln(os.Stderr, "next: run `zerobased help`")
+		os.Exit(1)
+	}
+}
+
+func isHelp(arg string) bool {
+	return arg == "--help" || arg == "-h" || arg == "help"
+}
+
 var cachedZBDir string
 
 func zerobasedDir() string {
@@ -171,6 +316,10 @@ func logFile() string { return filepath.Join(zerobasedDir(), "daemon.log") }
 func cmdStart() {
 	detached := false
 	for _, arg := range os.Args[2:] {
+		if isHelp(arg) {
+			printCommandHelp("start")
+			return
+		}
 		if arg == "-d" || arg == "--detach" {
 			detached = true
 		}
@@ -258,6 +407,13 @@ func cmdStart() {
 }
 
 func cmdStop() {
+	for _, arg := range os.Args[2:] {
+		if isHelp(arg) {
+			printCommandHelp("stop")
+			return
+		}
+	}
+
 	// Kill background daemon if running — verify it's actually zerobased
 	if pid, err := readPID(); err == nil {
 		if isZerobasedProcess(pid) {
@@ -290,6 +446,9 @@ func cmdLogs() {
 	lines := 100
 	for i := 2; i < len(os.Args); i++ {
 		switch {
+		case isHelp(os.Args[i]):
+			printCommandHelp("logs")
+			return
 		case os.Args[i] == "-f" || os.Args[i] == "--follow":
 			follow = true
 		case strings.HasPrefix(os.Args[i], "-n") && len(os.Args[i]) > 2:
@@ -439,8 +598,12 @@ func readPID() (int, error) {
 
 func cmdRun() {
 	args := os.Args[2:]
+	if len(args) > 0 && isHelp(args[0]) {
+		printCommandHelp("run")
+		return
+	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased run [-p port] [name] <command> [args...]")
+		printCommandHelp("run")
 		os.Exit(1)
 	}
 
@@ -497,6 +660,9 @@ func cmdEnv() {
 	project := ""
 	for _, arg := range os.Args[2:] {
 		switch {
+		case isHelp(arg):
+			printCommandHelp("env")
+			return
 		case arg == "--export" || arg == "-e":
 			export = true
 		default:
@@ -518,6 +684,7 @@ func cmdEnv() {
 		} else {
 			fmt.Fprintln(os.Stderr, "no services found")
 		}
+		fmt.Fprintln(os.Stderr, "next: run `zerobased ps`; if empty, run `zerobased start -d` then `docker compose up -d`")
 		os.Exit(1)
 	}
 
@@ -538,6 +705,7 @@ func cmdPs() {
 	endpoints := env.EndpointsFromContainers(daemon.DefaultBaseDir(), containers, "")
 	if len(endpoints) == 0 {
 		fmt.Println("no compose services running")
+		fmt.Println("next: run `zerobased start -d`, then `docker compose up -d`, then `zerobased ps`")
 		return
 	}
 
@@ -564,8 +732,12 @@ func cmdPs() {
 func cmdGet() {
 	// Parse: zerobased get <service> [-t template] [-v key=val]...
 	args := os.Args[2:]
+	if len(args) > 0 && isHelp(args[0]) {
+		printCommandHelp("get")
+		return
+	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: zerobased get <service> [-t template] [-v key=val]...")
+		printCommandHelp("get")
 		os.Exit(1)
 	}
 
@@ -591,7 +763,7 @@ func cmdGet() {
 	}
 
 	if target == "" {
-		fmt.Fprintln(os.Stderr, "usage: zerobased get <service> [-t template] [-v key=val]...")
+		printCommandHelp("get")
 		os.Exit(1)
 	}
 
@@ -621,6 +793,7 @@ func cmdGet() {
 
 	if !found {
 		fmt.Fprintf(os.Stderr, "service %q not found\n", target)
+		fmt.Fprintln(os.Stderr, "next: run `zerobased ps` to list service names")
 		os.Exit(1)
 	}
 }
