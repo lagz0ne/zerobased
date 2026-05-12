@@ -84,9 +84,10 @@ func ParseYAML(data []byte) (*YAMLFile, error) {
 // Last-write-wins for duplicate route paths. Detects circular extends.
 func MergeProfiles(profiles map[string]Profile, names []string) (map[string]string, error) {
 	merged := make(map[string]string)
+	applied := make(map[string]bool)
 
 	for _, name := range names {
-		if err := resolveExtends(profiles, name, merged, nil); err != nil {
+		if err := resolveExtends(profiles, name, merged, nil, applied); err != nil {
 			return nil, err
 		}
 	}
@@ -95,7 +96,11 @@ func MergeProfiles(profiles map[string]Profile, names []string) (map[string]stri
 }
 
 // resolveExtends recursively resolves a profile's extends chain and overlays its routes.
-func resolveExtends(profiles map[string]Profile, name string, merged map[string]string, visited []string) error {
+func resolveExtends(profiles map[string]Profile, name string, merged map[string]string, visited []string, applied map[string]bool) error {
+	if applied[name] {
+		return nil
+	}
+
 	// Cycle detection
 	for _, v := range visited {
 		if v == name {
@@ -112,7 +117,7 @@ func resolveExtends(profiles map[string]Profile, name string, merged map[string]
 
 	// Resolve extends first (base routes applied before this profile's routes)
 	for _, ext := range p.Extends {
-		if err := resolveExtends(profiles, ext, merged, visited); err != nil {
+		if err := resolveExtends(profiles, ext, merged, visited, applied); err != nil {
 			return err
 		}
 	}
@@ -121,6 +126,7 @@ func resolveExtends(profiles map[string]Profile, name string, merged map[string]
 	for path, target := range p.Routes {
 		merged[path] = target
 	}
+	applied[name] = true
 
 	return nil
 }

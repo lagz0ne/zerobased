@@ -440,6 +440,39 @@ profiles:
 	}
 }
 
+func TestResolveProfile_CLIMergeKeepsEarlierOverridesWhenProfilesShareBase(t *testing.T) {
+	data := []byte(`
+profiles:
+  default:
+    routes:
+      /api: api
+      /ws: ws
+      /: frontend
+  staging:
+    extends: [default]
+    routes:
+      /api: https://api.staging.example.com
+      /ws: wss://ws.staging.example.com
+  debug:
+    extends: [default]
+    routes:
+      /db: postgres://staging-db.example.com:5432
+`)
+	_, targets, err := ResolveProfile(data, []string{"staging", "debug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := targets["/api"].Host; got != "api.staging.example.com" {
+		t.Fatalf("/api host = %q, want staging override", got)
+	}
+	if got := targets["/ws"].Host; got != "ws.staging.example.com" {
+		t.Fatalf("/ws host = %q, want staging override", got)
+	}
+	if got := targets["/db"].Host; got != "staging-db.example.com" {
+		t.Fatalf("/db host = %q, want debug route", got)
+	}
+}
+
 func TestResolveProfile_SortsByLen(t *testing.T) {
 	data := []byte(`
 profiles:

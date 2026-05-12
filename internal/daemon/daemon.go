@@ -214,7 +214,7 @@ func (d *Daemon) loadRoutefile(info *docker.ContainerInfo) *routes.File {
 		return rf
 	}
 
-	// Look for zerobased.routes in the compose project working directory
+	// Look for zerobased.routes.yaml in the compose project working directory
 	workDir := info.Labels["com.docker.compose.project.working_dir"]
 	if workDir == "" {
 		d.mu.Lock()

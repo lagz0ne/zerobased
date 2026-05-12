@@ -18,6 +18,7 @@ import (
 	"github.com/lagz0ne/zerobased/internal/docker"
 	"github.com/lagz0ne/zerobased/internal/env"
 	"github.com/lagz0ne/zerobased/internal/run"
+	"github.com/lagz0ne/zerobased/internal/up"
 )
 
 // Global flags parsed before subcommand dispatch.
@@ -79,6 +80,8 @@ dispatch:
 		cmdLogs()
 	case "run":
 		cmdRun()
+	case "up":
+		cmdUp()
 	case "env":
 		cmdEnv()
 	case "ps":
@@ -107,7 +110,8 @@ func printUsage(args []string) {
 		printCommandHelp(args[0])
 		return
 	}
-	fmt.Println(`zerobased — zero-config Docker service router
+	fmt.Printf(`zerobased — zero-config Docker service router
+Version: %s
 
 Usage:
   zerobased [flags] <command> [args...]
@@ -121,6 +125,7 @@ Commands:
   help [command]                           Show guided help
   version                                  Print build version
   start [-d]                               Start daemon (-d for background)
+  up [--profile name] [--set k=v]          Load zerobased.yaml and run configured services
   stop                                     Stop daemon + cleanup
   logs [-f]                                Show daemon logs (-f to follow)
   run [-p port] [name] <cmd>               Wrap dev server, register route
@@ -145,12 +150,11 @@ If stuck:
   zerobased stop && zerobased start -d
   zerobased help <command>
 
-Routefile (zerobased.routes — path-based gateway):
-  /api     api               myapp.localhost/api → api container
-  /ws      ws                myapp.localhost/ws  → ws container
-  /        frontend          myapp.localhost/    → frontend container
+Supported routefile (zerobased.routes.yaml):
+  Use zerobased.routes.yaml for explicit routing, profiles, and external upstreams.
+  It is the only supported routefile format. LLMs/automation should emit this
+  file next to docker-compose.yml.
 
-Routefile with profiles (zerobased.routes.yaml):
   profiles:
     default:
       routes:
@@ -163,6 +167,12 @@ Routefile with profiles (zerobased.routes.yaml):
 
   External targets: https://, wss://, postgres://, nats://, redis://
   Usage: zerobased start --profile debug
+  If you omit --profile, define profiles.default.
+  External URL targets keep scheme/host/port only; the route path comes from the YAML key.
+
+Portless app config (zerobased.yaml):
+  zerobased up loads zerobased.yaml, allocates named endpoints, injects env,
+  and registers generated localhost hosts for configured services and routes.
 
 Templates (zerobased get -t):
   zerobased get postgres -t 'postgresql://{{user}}:{{pass}}@/{{db}}?host={{socket_dir}}' \
@@ -172,10 +182,11 @@ Templates (zerobased get -t):
              socket, socket_dir (socket types), host, port (http/port types)
 
 Shell eval:
-  eval "$(zerobased env --export acountee)"`)
+  eval "$(zerobased env --export acountee)"`, version)
 }
 
 func printCommandHelp(command string) {
+	fmt.Printf("Version: %s\n\n", version)
 	switch command {
 	case "start":
 		fmt.Println(`Usage: zerobased start [-d]
@@ -212,6 +223,10 @@ Examples:
 
 Wrap a host dev server, register a route, inject ZB_* env vars, and clean up on exit.
 
+Routefiles:
+  Use zerobased.routes.yaml next to docker-compose.yml. It is the only supported
+  routefile format for explicit routes, profiles, and external upstreams.
+
 Examples:
   zerobased run web pnpm dev
   zerobased run -p 3000 web pnpm dev
@@ -219,6 +234,21 @@ Examples:
 Next:
   zerobased ps
   zerobased get <service>`)
+	case "up":
+		fmt.Println(`Usage: zerobased up [--profile name] [--set k=v]...
+
+Load zerobased.yaml, allocate named local endpoints, start configured services,
+and register generated localhost routes.
+
+Examples:
+  zerobased up
+  zerobased up --profile staging --set db.url=postgres://staging/app
+
+Notes:
+  zerobased.yaml is the app/runtime config; zerobased.routes.yaml remains the
+  routefile format for Docker/daemon routing.
+  This runtime currently supports env_port delivery and local HTTP/TCP endpoints.
+  Routed HTTP services need a matching same-name ports.<service>: http entry.`)
 	case "env":
 		fmt.Println(`Usage: zerobased env [--export] [project]
 
@@ -584,6 +614,14 @@ func parseProfiles() []string {
 	return result
 }
 
+func parseSetArg(arg string) (string, string, error) {
+	key, value, ok := strings.Cut(arg, "=")
+	if !ok || strings.TrimSpace(key) == "" {
+		return "", "", fmt.Errorf("--set expects key=value, got %q", arg)
+	}
+	return strings.TrimSpace(key), value, nil
+}
+
 func readPID() (int, error) {
 	data, err := os.ReadFile(pidFile())
 	if err != nil {
@@ -636,6 +674,53 @@ func cmdRun() {
 		DockerHost: dockerHost,
 		EnvPrefix:  envPrefix,
 		Profiles:   parseProfiles(),
+	}); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func cmdUp() {
+	args := os.Args[2:]
+	if len(args) > 0 && isHelp(args[0]) {
+		printCommandHelp("up")
+		return
+	}
+
+	currentProfile := profile
+	overrides := map[string]string{}
+
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--profile" && i+1 < len(args):
+			currentProfile = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--profile="):
+			currentProfile = strings.TrimPrefix(args[i], "--profile=")
+		case args[i] == "--set" && i+1 < len(args):
+			key, value, err := parseSetArg(args[i+1])
+			if err != nil {
+				log.Fatal(err)
+			}
+			overrides[key] = value
+			i++
+		case strings.HasPrefix(args[i], "--set="):
+			key, value, err := parseSetArg(strings.TrimPrefix(args[i], "--set="))
+			if err != nil {
+				log.Fatal(err)
+			}
+			overrides[key] = value
+		default:
+			log.Fatalf("up: unknown arg %q", args[i])
+		}
+	}
+
+	if strings.Contains(currentProfile, ",") {
+		log.Fatal("up: only one --profile value is supported")
+	}
+
+	if err := up.Run(up.Options{
+		Profile:   currentProfile,
+		Overrides: overrides,
 	}); err != nil {
 		log.Fatal(err)
 	}

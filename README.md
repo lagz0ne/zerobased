@@ -2,7 +2,9 @@
 
 Zero-config Docker service router. Watches `docker.sock` for container events, auto-classifies ports, creates Unix sockets + HTTP routes. Cleans up when containers stop.
 
-No config files. No Docker labels. No setup scripts. No external dependencies. Your existing `docker-compose.yml` works as-is.
+Version check: run `zerobased version` before following this README. The current branch documents the YAML-only `zerobased.routes.yaml` contract; older installed binaries may not match it yet.
+
+No required config files by default. Optional explicit routing uses `zerobased.routes.yaml`. No Docker labels. No setup scripts. No external dependencies. Your existing `docker-compose.yml` works as-is.
 
 ## Install
 
@@ -54,6 +56,7 @@ Commands:
   help [command]                           Show guided help
   version                                  Print build version
   start [-d]                               Start daemon (-d for background)
+  up [--profile name] [--set k=v]          Load zerobased.yaml and run configured services
   stop                                     Stop daemon + cleanup
   logs [-f]                                Show daemon logs (-f to follow)
   run [-p port] [name] <cmd>               Wrap dev server, register route
@@ -73,6 +76,7 @@ Every command supports a guided help path:
 ```bash
 zerobased help
 zerobased help run
+zerobased help up
 zerobased help domain
 ```
 
@@ -84,6 +88,8 @@ docker compose up -d
 zerobased ps
 zerobased get <service>
 ```
+
+If you need explicit gateway routes, profiles, or external upstreams, emit `zerobased.routes.yaml` next to `docker-compose.yml`. It is the only supported routefile format.
 
 ### Daemon
 
@@ -103,6 +109,8 @@ zerobased run -p 3000 acountee pnpm dev   # explicit port
 
 Port is auto-detected by scanning the child process output for `http://localhost:XXXX`. Works with Vite, Next, Nuxt, or any framework that prints its URL. Use `-p` if auto-detect doesn't work.
 
+For path-based gateways or profile-aware routing, put `zerobased.routes.yaml` beside `docker-compose.yml`. That is the only supported routefile format for both humans and LLMs.
+
 Also injects `ZB_*` env vars for all project services:
 
 ```
@@ -111,24 +119,9 @@ ZB_NATS_4222=localhost:26987
 ZB_NATS_80=http://nats-80.acountee.localhost
 ```
 
-### Path-based routing (routefile)
+### Supported routefile: `zerobased.routes.yaml`
 
-Drop a `zerobased.routes` file next to your `docker-compose.yml` to get a single gateway with path routing instead of one hostname per service:
-
-```
-# zerobased.routes
-/api     api
-/ws      ws
-/        frontend
-```
-
-This creates `myapp.localhost/api`, `myapp.localhost/ws`, `myapp.localhost/` — each routing to the named docker-compose service. The gateway hostname is derived from your Compose project name.
-
-No routefile = existing hostname-per-service behavior. Nothing breaks.
-
-### Profiles & external upstreams
-
-Use `zerobased.routes.yaml` for profiles with inheritance and external service targets:
+Use YAML when you want explicit routing that tools can discover reliably. It is the only supported format and the one that handles profiles and external upstreams.
 
 ```yaml
 # zerobased.routes.yaml
@@ -157,6 +150,8 @@ zerobased start --profile staging,debug  # merge multiple profiles
 ```
 
 Supported external targets: `https://`, `wss://`, `postgres://`, `nats://`, `redis://`. Profiles merge left-to-right with last-write-wins on conflicting paths.
+If you omit `--profile`, define `profiles.default`.
+External URL targets keep scheme, host, and port only; the route path still comes from the YAML key.
 
 ### Connection strings
 
@@ -196,15 +191,22 @@ echo $POSTGRES_5432
 
 ## Portless service fabric
 
-Status: planned runtime behavior. The pure contracts live in `internal/fabric`; CLI and daemon wiring are still future work. Do not present `zerobased up` or `zerobased.yaml` as released product behavior yet.
+Status: implemented initial runtime. `zerobased up` now loads `zerobased.yaml`, plans named endpoints, renders env, starts local processes, waits for configured readiness checks, and registers generated localhost routes through Caddy.
 
 The goal is to remove port choice from normal local development. Users and agents name services. Zerobased leases private endpoints, injects them into processes or containers, probes readiness, exposes stable names, and cleans residue by lease.
 
 The important inversion: zerobased should assign and inject private endpoints before the process starts. The app can use random private ports or sockets. Zerobased organizes them with env aliases and proxies. The fabric should not guess ports from stdout after startup.
 
-### Intended usage
+Current runtime scope:
 
-Create `zerobased.yaml`:
+- `env_port` delivery is implemented.
+- Local `http` and `tcp` endpoints are implemented.
+- One `--profile` value plus repeated `--set key=value` overrides are implemented.
+- Routed HTTP services must have a matching same-name `ports.<service>: http` entry.
+
+### Current usage
+
+`zerobased.yaml` can look like this:
 
 ```yaml
 identity:

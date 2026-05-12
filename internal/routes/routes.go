@@ -1,15 +1,12 @@
 package routes
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 )
 
-const Filename = "zerobased.routes"
+const legacyFilename = "zerobased.routes"
 const YAMLFilename = "zerobased.routes.yaml"
 
 // Entry represents one line in a routefile: path prefix → target.
@@ -25,14 +22,14 @@ type File struct {
 	Gateway string // project.localhost
 }
 
-// Load reads a routefile from the given directory. Returns nil if no routefile exists.
-// Checks for YAML format first (zerobased.routes.yaml), falls back to text format.
+// Load reads the supported YAML routefile from the given directory.
+// Returns nil if no routefile exists.
 func Load(dir string) (*File, error) {
 	return LoadWithProfile(dir, nil)
 }
 
-// LoadWithProfile loads a routefile with profile selection.
-// If profiles is nil/empty, uses "default" for YAML or ignores for text format.
+// LoadWithProfile loads the supported YAML routefile with profile selection.
+// If profiles is nil/empty, "default" is used.
 func LoadWithProfile(dir string, profiles []string) (*File, error) {
 	yamlPath := filepath.Join(dir, YAMLFilename)
 	data, yamlErr := os.ReadFile(yamlPath)
@@ -52,64 +49,17 @@ func LoadWithProfile(dir string, profiles []string) (*File, error) {
 		return nil, fmt.Errorf("read %s: %w", YAMLFilename, yamlErr)
 	}
 
-	// Fall back to text format
+	legacyPath := filepath.Join(dir, legacyFilename)
+	if _, legacyErr := os.Stat(legacyPath); legacyErr == nil {
+		return nil, fmt.Errorf("%s is no longer supported; use %s", legacyFilename, YAMLFilename)
+	} else if !os.IsNotExist(legacyErr) {
+		return nil, fmt.Errorf("stat %s: %w", legacyFilename, legacyErr)
+	}
+
 	if len(profiles) > 0 {
-		return nil, fmt.Errorf("--profile requires %s (text format does not support profiles)", YAMLFilename)
+		return nil, fmt.Errorf("--profile requires %s", YAMLFilename)
 	}
-	return loadText(dir)
-}
-
-// loadText reads the old two-column text format.
-func loadText(dir string) (*File, error) {
-	path := filepath.Join(dir, Filename)
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	var entries []Entry
-	scanner := bufio.NewScanner(f)
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			return nil, fmt.Errorf("%s:%d: expected 'path service', got %q", Filename, lineNum, line)
-		}
-
-		path, service := fields[0], fields[1]
-		if !strings.HasPrefix(path, "/") {
-			return nil, fmt.Errorf("%s:%d: path must start with /, got %q", Filename, lineNum, path)
-		}
-
-		entries = append(entries, Entry{
-			Path:    path,
-			Service: service,
-			Target:  Target{Raw: service, Service: service},
-		})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", Filename, err)
-	}
-
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("%s: no routes defined", Filename)
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return len(entries[i].Path) > len(entries[j].Path)
-	})
-
-	return &File{Entries: entries}, nil
+	return nil, nil
 }
 
 // FindService looks up the service name for a given route name (used by `run`).

@@ -3,17 +3,20 @@ package routes
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
-	content := `# comment
-/api     api
-/ws      ws
-/        frontend
+	content := `profiles:
+  default:
+    routes:
+      /api: api
+      /ws: ws
+      /: frontend
 `
-	os.WriteFile(filepath.Join(dir, Filename), []byte(content), 0644)
+	os.WriteFile(filepath.Join(dir, YAMLFilename), []byte(content), 0644)
 
 	rf, err := Load(dir)
 	if err != nil {
@@ -48,13 +51,13 @@ func TestLoadNoFile(t *testing.T) {
 	}
 }
 
-func TestLoadInvalidPath(t *testing.T) {
+func TestLoadRejectsLegacyRoutefileWithInvalidContent(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, Filename), []byte("noslash api\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "zerobased.routes"), []byte("noslash api\n"), 0644)
 
 	_, err := Load(dir)
-	if err == nil {
-		t.Fatal("expected error for path without /")
+	if err == nil || !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("expected legacy routefile rejection, got %v", err)
 	}
 }
 
@@ -75,17 +78,16 @@ func TestFindService(t *testing.T) {
 	}
 }
 
-func TestLoad_TextPopulatesTarget(t *testing.T) {
+func TestLoadRejectsLegacyTextRoutefile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, Filename), []byte("/api api\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "zerobased.routes"), []byte("/api api\n"), 0644)
 
-	rf, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected legacy routefile to be rejected")
 	}
-	e := rf.Entries[0]
-	if e.Target.Service != "api" || e.Target.External {
-		t.Errorf("text entry Target = %+v, want bare service", e.Target)
+	if !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("expected unsupported legacy error, got %v", err)
 	}
 }
 
@@ -112,27 +114,6 @@ func TestLoad_DetectsYAML(t *testing.T) {
 	// /api is longer, should be first
 	if rf.Entries[0].Path != "/api" || rf.Entries[0].Service != "api" {
 		t.Errorf("entry[0] = %+v, want /api → api", rf.Entries[0])
-	}
-}
-
-func TestLoad_YAMLPrecedence(t *testing.T) {
-	dir := t.TempDir()
-	// Text file with different content
-	os.WriteFile(filepath.Join(dir, Filename), []byte("/old old-service\n"), 0644)
-	// YAML file takes precedence
-	yaml := `profiles:
-  default:
-    routes:
-      /new: new-service
-`
-	os.WriteFile(filepath.Join(dir, YAMLFilename), []byte(yaml), 0644)
-
-	rf, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rf.Entries[0].Service != "new-service" {
-		t.Errorf("YAML should take precedence, got %q", rf.Entries[0].Service)
 	}
 }
 
@@ -169,13 +150,13 @@ func TestLoadWithProfile(t *testing.T) {
 	t.Error("/api entry not found")
 }
 
-func TestLoadWithProfile_TextRejectsProfile(t *testing.T) {
+func TestLoadWithProfile_RequiresYAMLRoutefile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, Filename), []byte("/api api\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "zerobased.routes"), []byte("/api api\n"), 0644)
 
 	_, err := LoadWithProfile(dir, []string{"staging"})
-	if err == nil {
-		t.Fatal("text format should reject --profile")
+	if err == nil || !strings.Contains(err.Error(), YAMLFilename) {
+		t.Fatalf("expected YAML-only routefile error, got %v", err)
 	}
 }
 

@@ -7,3 +7,4 @@ npm/linux-arm64/zerobased
 npm/darwin-x64/zerobased
 npm/darwin-arm64/zerobased
 npm/zerobased/README.md
+.c3/c3.db
