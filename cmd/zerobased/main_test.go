@@ -8,86 +8,42 @@ import (
 	"testing"
 )
 
-func TestPrintUsageHighlightsPreferredYAMLRoutefile(t *testing.T) {
-	out := captureStdout(t, func() {
-		printUsage(nil)
-	})
+func TestPrintRewriteNotice(t *testing.T) {
+	out := captureStdout(t, printRewriteNotice)
 
-	if !strings.Contains(out, "only supported routefile format") {
-		t.Fatalf("top-level help should make YAML-only support explicit, got:\n%s", out)
-	}
-
-	if strings.Contains(out, "Legacy zerobased.routes") {
-		t.Fatalf("top-level help should not mention the removed legacy routefile, got:\n%s", out)
-	}
-
-	if !strings.Contains(out, "up [--profile name] [--set k=v]") {
-		t.Fatalf("top-level help should list the up command, got:\n%s", out)
-	}
-}
-
-func TestPrintUsageShowsVersionBeforeUsage(t *testing.T) {
-	orig := version
-	version = "test-version"
-	defer func() {
-		version = orig
-	}()
-
-	out := captureStdout(t, func() {
-		printUsage(nil)
-	})
-
-	versionIdx := strings.Index(out, "Version: test-version")
-	usageIdx := strings.Index(out, "Usage:")
-	if versionIdx == -1 {
-		t.Fatalf("top-level help should print the current version, got:\n%s", out)
-	}
-	if usageIdx == -1 || versionIdx > usageIdx {
-		t.Fatalf("version should appear before usage, got:\n%s", out)
-	}
-}
-
-func TestPrintCommandHelpRunHighlightsYAMLRoutefile(t *testing.T) {
-	out := captureStdout(t, func() {
-		printCommandHelp("run")
-	})
-
-	if !strings.Contains(out, "zerobased.routes.yaml") {
-		t.Fatalf("run help should mention YAML routefiles, got:\n%s", out)
-	}
-
-	if !strings.Contains(out, "only supported") {
-		t.Fatalf("run help should mark YAML routefiles as the only supported format, got:\n%s", out)
-	}
-
-	if strings.Contains(out, "Legacy zerobased.routes") {
-		t.Fatalf("run help should not mention the removed legacy routefile, got:\n%s", out)
+	for _, want := range []string{
+		"Rewrite in progress.",
+		"zerobased start",
+		"zerobased up",
+		"compose:",
+		"files:",
+		"traced-TDD failure ownership",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("notice missing %q\n%s", want, out)
+		}
 	}
 }
 
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 
-	orig := os.Stdout
+	old := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("pipe: %v", err)
+		t.Fatal(err)
 	}
-
 	os.Stdout = w
 	defer func() {
-		os.Stdout = orig
-	}()
-
-	done := make(chan string, 1)
-	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		done <- buf.String()
+		os.Stdout = old
 	}()
 
 	fn()
+	w.Close()
 
-	_ = w.Close()
-	return <-done
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
 }

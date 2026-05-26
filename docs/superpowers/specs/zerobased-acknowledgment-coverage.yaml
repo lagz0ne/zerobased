@@ -1,0 +1,771 @@
+version: 1
+schema: zerobased-acknowledgment-coverage
+owner:
+  c3_component: c3-101
+  rfc: docs/superpowers/specs/2026-05-13-zerobased-traced-tdd-rfc.md
+
+implemented_tests:
+  - test_id: 'control-plane-client--transport-unavailable'
+    file: internal/controlplane/client_test.go
+    test: TestClientReturnsConnectionFailedWhenSocketMissing
+  - test_id: 'control-plane-client--remote-hostclaimconflict'
+    file: internal/controlplane/client_test.go
+    test: TestClientDecodesDaemonErrorEnvelope
+  - test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-hostclaimconflict'
+    file: internal/daemon/start_test.go
+    test: TestPublishRequiresMatchingClaimToken
+  - test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-staletokenrejected'
+    file: internal/daemon/start_test.go
+    test: TestPublishRequiresMatchingClaimToken
+  - test_id: 'stack-orchestrator-consumes-process-launcher--process-spawnfailed'
+    file: internal/up/runner_test.go
+    test: TestTerminateProcessesStopsProcessGroups
+  - test_id: 'stack-orchestrator-consumes-process-launcher--process-exitedearly'
+    file: internal/up/runner_test.go
+    test: TestRunFailsIfChildExitsAfterPublicationBeforeContextCancellation
+  - test_id: 'stack-orchestrator-consumes-readiness-probe--readiness-probefailed'
+    file: internal/up/runner_test.go
+    test: TestRunClaimsBeforeProcessStartAndPublishesAfterReadiness
+  - test_id: 'stack-orchestrator-consumes-compose-backend--compose-modelinvalid'
+    file: internal/up/runner_test.go
+    test: TestRunMapsComposeModelInvalidToPreflightRejected
+  - test_id: 'stack-orchestrator-consumes-compose-backend--compose-isolationrejected'
+    file: internal/up/runner_test.go
+    test: TestRunMapsComposeIsolationRejectedToPreflightRejected
+  - test_id: 'stack-orchestrator-consumes-compose-backend--compose-lifecyclefailed'
+    file: internal/up/runner_test.go
+    test: TestRunMapsComposeLifecycleFailedToDependencyStartFailed
+
+rows:
+  - section: 'CLI `start`'
+    consumed: 'invalid args'
+    decision: 'Resolve'
+    becomes: '`InvalidInvocation` at process boundary'
+    test_id: 'cli-start--invalid-args'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'daemon IPC `SocketBindFailed`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"ipc"}`'
+    test_id: 'cli-start--daemon-ipc-socketbindfailed'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'daemon IPC `HealthCheckFailed`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"health"}`'
+    test_id: 'cli-start--daemon-ipc-healthcheckfailed'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'daemon IPC `DispatchFailed`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"boot"}`'
+    test_id: 'cli-start--daemon-ipc-dispatchfailed'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'daemon IPC `Critical`'
+    decision: 'Transform'
+    becomes: 'CLI `Critical` with origin chain'
+    test_id: 'cli-start--daemon-ipc-critical'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'control-plane `BootFailed`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"boot"}`'
+    test_id: 'cli-start--control-plane-bootfailed'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'control-plane `RouteRuntimeUnavailable`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"route_runtime"}`'
+    test_id: 'cli-start--control-plane-routeruntimeunavailable'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'control-plane `StoreUnavailable`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"store"}`'
+    test_id: 'cli-start--control-plane-storeunavailable'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'control-plane `CorruptState`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"recovery"}`'
+    test_id: 'cli-start--control-plane-corruptstate'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'control-plane `RecoveryConflict`'
+    decision: 'Transform'
+    becomes: '`StartFailed{phase:"recovery"}`'
+    test_id: 'cli-start--control-plane-recoveryconflict'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'control-plane `Critical`'
+    decision: 'Transform'
+    becomes: 'CLI `Critical` with origin chain'
+    test_id: 'cli-start--control-plane-critical'
+    implementation: planned
+  - section: 'CLI `start`'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'CLI `Critical`'
+    test_id: 'cli-start--unknown'
+    implementation: planned
+
+  - section: 'CLI `up`'
+    consumed: 'invalid args'
+    decision: 'Resolve'
+    becomes: '`InvalidInvocation` at process boundary'
+    test_id: 'cli-up--invalid-args'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `ConfigInvalid`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"config"}`'
+    test_id: 'cli-up--orchestrator-configinvalid'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `ClaimRejected`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"claim"}`'
+    test_id: 'cli-up--orchestrator-claimrejected'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `PreflightRejected`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"preflight"}`'
+    test_id: 'cli-up--orchestrator-preflightrejected'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `DependencyStartFailed`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"dependency"}`'
+    test_id: 'cli-up--orchestrator-dependencystartfailed'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `ReadinessFailed`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"readiness"}`'
+    test_id: 'cli-up--orchestrator-readinessfailed'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `GenerationCommitFailed`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"publish"}`'
+    test_id: 'cli-up--orchestrator-generationcommitfailed'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `CleanupFailed`'
+    decision: 'Transform'
+    becomes: '`UpFailed{phase:"cleanup"}`'
+    test_id: 'cli-up--orchestrator-cleanupfailed'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'orchestrator `Critical`'
+    decision: 'Transform'
+    becomes: 'CLI `Critical` with origin chain'
+    test_id: 'cli-up--orchestrator-critical'
+    implementation: planned
+  - section: 'CLI `up`'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'CLI `Critical`'
+    test_id: 'cli-up--unknown'
+    implementation: planned
+
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'invalid request payload'
+    decision: 'Resolve'
+    becomes: 'daemon IPC `ProtocolDecodeFailed`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--invalid-request-payload'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'handler dispatch failure before service call'
+    decision: 'Transform'
+    becomes: 'daemon IPC `DispatchFailed`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--handler-dispatch-failure-before-service-call'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `BootFailed`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `BootFailed`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-bootfailed'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `HostClaimConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `HostClaimConflict`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-hostclaimconflict'
+    implementation: implemented
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `ListenerClaimConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `ListenerClaimConflict`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-listenerclaimconflict'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `RouteNamespaceClaimConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `RouteNamespaceClaimConflict`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-routenamespaceclaimconflict'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `LeaseRejected`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `LeaseRejected`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-leaserejected'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `PublicationRejected`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `PublicationRejected`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-publicationrejected'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `StaleTokenRejected`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `StaleTokenRejected`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-staletokenrejected'
+    implementation: implemented
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `RecoveryConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `RecoveryConflict`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-recoveryconflict'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `RouteRuntimeUnavailable`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `RouteRuntimeUnavailable`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-routeruntimeunavailable'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `StoreUnavailable`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `StoreUnavailable`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-storeunavailable'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `CorruptState`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `CorruptState`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-corruptstate'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `Critical`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `Critical`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-critical'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'control-plane `PublicationDegraded` status'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane status in successful response'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--control-plane-publicationdegraded-status'
+    implementation: planned
+  - section: 'Daemon IPC/API Server Consumes Control-Plane Service'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'daemon IPC `Critical`'
+    test_id: 'daemon-ipc-api-server-consumes-control-plane-service--unknown'
+    implementation: planned
+
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `OpenFailed`'
+    decision: 'Transform'
+    becomes: '`StoreUnavailable`'
+    test_id: 'control-plane-service-consumes-store--store-openfailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `LockHeld` during startup lock acquisition'
+    decision: 'Transform'
+    becomes: '`BootFailed`'
+    test_id: 'control-plane-service-consumes-store--store-lockheld-during-startup-lock-acquisition'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `LockHeld` during recovery/reattach'
+    decision: 'Transform'
+    becomes: '`RecoveryConflict`'
+    test_id: 'control-plane-service-consumes-store--store-lockheld-during-recovery-reattach'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `ReadFailed`'
+    decision: 'Transform'
+    becomes: '`StoreUnavailable`'
+    test_id: 'control-plane-service-consumes-store--store-readfailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `WriteFailed`'
+    decision: 'Transform'
+    becomes: '`StoreUnavailable`'
+    test_id: 'control-plane-service-consumes-store--store-writefailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `CorruptState`'
+    decision: 'Transform'
+    becomes: 'control-plane `CorruptState`'
+    test_id: 'control-plane-service-consumes-store--store-corruptstate'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `AtomicCommitFailed` during publication journal commit'
+    decision: 'Transform'
+    becomes: '`PublicationRejected`'
+    test_id: 'control-plane-service-consumes-store--store-atomiccommitfailed-during-publication-journal-commit'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `AtomicCommitFailed` during non-publication state write'
+    decision: 'Transform'
+    becomes: '`StoreUnavailable`'
+    test_id: 'control-plane-service-consumes-store--store-atomiccommitfailed-during-non-publication-state-write'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'store `Critical`'
+    decision: 'Transform'
+    becomes: 'control-plane `Critical` with origin chain'
+    test_id: 'control-plane-service-consumes-store--store-critical'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Store'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'control-plane `Critical`'
+    test_id: 'control-plane-service-consumes-store--unknown'
+    implementation: planned
+
+  - section: 'Control-Plane Service Consumes Route Runtime'
+    consumed: 'route `BootstrapFailed`'
+    decision: 'Transform'
+    becomes: '`RouteRuntimeUnavailable`'
+    test_id: 'control-plane-service-consumes-route-runtime--route-bootstrapfailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Route Runtime'
+    consumed: 'route `ReloadFailed`'
+    decision: 'Transform'
+    becomes: '`RouteRuntimeUnavailable`'
+    test_id: 'control-plane-service-consumes-route-runtime--route-reloadfailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Route Runtime'
+    consumed: 'route `ApplyRejected`'
+    decision: 'Transform'
+    becomes: '`PublicationRejected`'
+    test_id: 'control-plane-service-consumes-route-runtime--route-applyrejected'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Route Runtime'
+    consumed: 'route `UnsupportedTransport`'
+    decision: 'Transform'
+    becomes: '`PublicationRejected`'
+    test_id: 'control-plane-service-consumes-route-runtime--route-unsupportedtransport'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Route Runtime'
+    consumed: 'route `Critical`'
+    decision: 'Transform'
+    becomes: 'control-plane `Critical` with origin chain'
+    test_id: 'control-plane-service-consumes-route-runtime--route-critical'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Route Runtime'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'control-plane `Critical`'
+    test_id: 'control-plane-service-consumes-route-runtime--unknown'
+    implementation: planned
+
+  - section: 'Control-Plane Service Consumes Auxiliary Publication'
+    consumed: 'aux `SharedDomainPublishFailed`'
+    decision: 'Transform'
+    becomes: '`PublicationDegraded` status'
+    test_id: 'control-plane-service-consumes-auxiliary-publication--aux-shareddomainpublishfailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Auxiliary Publication'
+    consumed: 'aux `MetadataRenderFailed`'
+    decision: 'Transform'
+    becomes: '`PublicationDegraded` status'
+    test_id: 'control-plane-service-consumes-auxiliary-publication--aux-metadatarenderfailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Auxiliary Publication'
+    consumed: 'aux `MetadataCacheFailed`'
+    decision: 'Transform'
+    becomes: '`PublicationDegraded` status'
+    test_id: 'control-plane-service-consumes-auxiliary-publication--aux-metadatacachefailed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Auxiliary Publication'
+    consumed: 'aux `Critical` after core local publish committed'
+    decision: 'Transform'
+    becomes: '`PublicationDegraded` status with origin chain'
+    test_id: 'control-plane-service-consumes-auxiliary-publication--aux-critical-after-core-local-publish-committed'
+    implementation: planned
+  - section: 'Control-Plane Service Consumes Auxiliary Publication'
+    consumed: 'unknown auxiliary-phase failure after core local publish committed'
+    decision: 'Transform'
+    becomes: '`PublicationDegraded` status with origin chain'
+    test_id: 'control-plane-service-consumes-auxiliary-publication--unknown-auxiliary-phase-failure-after-core-local-publish-committed'
+    implementation: planned
+
+  - section: 'Control-Plane Client'
+    consumed: 'transport unavailable'
+    decision: 'Transform'
+    becomes: '`ConnectionFailed`'
+    test_id: 'control-plane-client--transport-unavailable'
+    implementation: implemented
+  - section: 'Control-Plane Client'
+    consumed: 'daemon IPC `HealthCheckFailed`'
+    decision: 'Transform'
+    becomes: '`ConnectionFailed`'
+    test_id: 'control-plane-client--daemon-ipc-healthcheckfailed'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'daemon IPC `ProtocolDecodeFailed`'
+    decision: 'Transform'
+    becomes: 'client `Critical` with origin chain'
+    test_id: 'control-plane-client--daemon-ipc-protocoldecodefailed'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'daemon IPC `DispatchFailed`'
+    decision: 'Transform'
+    becomes: 'client `Critical` with origin chain'
+    test_id: 'control-plane-client--daemon-ipc-dispatchfailed'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'daemon IPC `Critical`'
+    decision: 'Transform'
+    becomes: 'client `Critical` with origin chain'
+    test_id: 'control-plane-client--daemon-ipc-critical'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `HostClaimConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `HostClaimConflict`'
+    test_id: 'control-plane-client--remote-hostclaimconflict'
+    implementation: implemented
+  - section: 'Control-Plane Client'
+    consumed: 'remote `ListenerClaimConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `ListenerClaimConflict`'
+    test_id: 'control-plane-client--remote-listenerclaimconflict'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `RouteNamespaceClaimConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `RouteNamespaceClaimConflict`'
+    test_id: 'control-plane-client--remote-routenamespaceclaimconflict'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `LeaseRejected`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `LeaseRejected`'
+    test_id: 'control-plane-client--remote-leaserejected'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `PublicationRejected`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `PublicationRejected`'
+    test_id: 'control-plane-client--remote-publicationrejected'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `StaleTokenRejected`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `StaleTokenRejected`'
+    test_id: 'control-plane-client--remote-staletokenrejected'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `RecoveryConflict`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `RecoveryConflict`'
+    test_id: 'control-plane-client--remote-recoveryconflict'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `StoreUnavailable`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `StoreUnavailable`'
+    test_id: 'control-plane-client--remote-storeunavailable'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `CorruptState`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `CorruptState`'
+    test_id: 'control-plane-client--remote-corruptstate'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `RouteRuntimeUnavailable`'
+    decision: 'Propagate'
+    becomes: 'unchanged control-plane `RouteRuntimeUnavailable`'
+    test_id: 'control-plane-client--remote-routeruntimeunavailable'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'remote `Critical`'
+    decision: 'Transform'
+    becomes: 'client `Critical` with origin chain'
+    test_id: 'control-plane-client--remote-critical'
+    implementation: planned
+  - section: 'Control-Plane Client'
+    consumed: 'unknown transport/protocol error'
+    decision: 'Transform'
+    becomes: 'client `Critical`'
+    test_id: 'control-plane-client--unknown-transport-protocol-error'
+    implementation: planned
+
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'client `ConnectionFailed` before dependency start'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--client-connectionfailed-before-dependency-start'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'client `ConnectionFailed` after dependency start'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--client-connectionfailed-after-dependency-start'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `HostClaimConflict`'
+    decision: 'Transform'
+    becomes: '`ClaimRejected`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-hostclaimconflict'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `ListenerClaimConflict`'
+    decision: 'Transform'
+    becomes: '`ClaimRejected`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-listenerclaimconflict'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `RouteNamespaceClaimConflict`'
+    decision: 'Transform'
+    becomes: '`ClaimRejected`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-routenamespaceclaimconflict'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `LeaseRejected`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-leaserejected'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `PublicationRejected`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-publicationrejected'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `StaleTokenRejected`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-staletokenrejected'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `RecoveryConflict`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-recoveryconflict'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `StoreUnavailable`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-storeunavailable'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `CorruptState`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-corruptstate'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `RouteRuntimeUnavailable`'
+    decision: 'Transform'
+    becomes: '`GenerationCommitFailed`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-routeruntimeunavailable'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'client `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--client-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'control-plane `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--control-plane-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Control-Plane Client And Service Errors'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical`'
+    test_id: 'stack-orchestrator-consumes-control-plane-client-and-service-errors--unknown'
+    implementation: planned
+
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `ConfigInvalid`'
+    decision: 'Transform'
+    becomes: 'orchestrator `ConfigInvalid`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-configinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `IdentityInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-identityinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `NamespaceInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-namespaceinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `EndpointPlanInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-endpointplaninvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `LifecycleInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-lifecycleinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `TemplateRenderInvalid`'
+    decision: 'Transform'
+    becomes: '`ConfigInvalid`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-templaterenderinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'core `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-fabric-core--core-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Fabric Core'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical`'
+    test_id: 'stack-orchestrator-consumes-fabric-core--unknown'
+    implementation: planned
+
+  - section: 'Stack Orchestrator Consumes Compose Backend'
+    consumed: 'Compose `ModelInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-compose-backend--compose-modelinvalid'
+    implementation: implemented
+  - section: 'Stack Orchestrator Consumes Compose Backend'
+    consumed: 'Compose `IsolationRejected`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-compose-backend--compose-isolationrejected'
+    implementation: implemented
+  - section: 'Stack Orchestrator Consumes Compose Backend'
+    consumed: 'Compose `LifecycleFailed`'
+    decision: 'Transform'
+    becomes: '`DependencyStartFailed`'
+    test_id: 'stack-orchestrator-consumes-compose-backend--compose-lifecyclefailed'
+    implementation: implemented
+  - section: 'Stack Orchestrator Consumes Compose Backend'
+    consumed: 'Compose `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-compose-backend--compose-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Compose Backend'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical`'
+    test_id: 'stack-orchestrator-consumes-compose-backend--unknown'
+    implementation: planned
+
+  - section: 'Stack Orchestrator Consumes Process Launcher'
+    consumed: 'process `SpawnFailed`'
+    decision: 'Transform'
+    becomes: '`DependencyStartFailed`'
+    test_id: 'stack-orchestrator-consumes-process-launcher--process-spawnfailed'
+    implementation: implemented
+  - section: 'Stack Orchestrator Consumes Process Launcher'
+    consumed: 'process `ExitedEarly`'
+    decision: 'Transform'
+    becomes: '`ReadinessFailed`'
+    test_id: 'stack-orchestrator-consumes-process-launcher--process-exitedearly'
+    implementation: implemented
+  - section: 'Stack Orchestrator Consumes Process Launcher'
+    consumed: 'process `ShutdownFailed`'
+    decision: 'Transform'
+    becomes: '`CleanupFailed`'
+    test_id: 'stack-orchestrator-consumes-process-launcher--process-shutdownfailed'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Process Launcher'
+    consumed: 'process `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-process-launcher--process-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Process Launcher'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical`'
+    test_id: 'stack-orchestrator-consumes-process-launcher--unknown'
+    implementation: planned
+
+  - section: 'Stack Orchestrator Consumes Readiness Probe'
+    consumed: 'readiness `ProbeInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-readiness-probe--readiness-probeinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Readiness Probe'
+    consumed: 'readiness `Timeout`'
+    decision: 'Transform'
+    becomes: '`ReadinessFailed`'
+    test_id: 'stack-orchestrator-consumes-readiness-probe--readiness-timeout'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Readiness Probe'
+    consumed: 'readiness `ProbeFailed`'
+    decision: 'Transform'
+    becomes: '`ReadinessFailed`'
+    test_id: 'stack-orchestrator-consumes-readiness-probe--readiness-probefailed'
+    implementation: implemented
+  - section: 'Stack Orchestrator Consumes Readiness Probe'
+    consumed: 'readiness `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-readiness-probe--readiness-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Readiness Probe'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical`'
+    test_id: 'stack-orchestrator-consumes-readiness-probe--unknown'
+    implementation: planned
+
+  - section: 'Stack Orchestrator Consumes Socket Bridge'
+    consumed: 'socket `BridgeInvalid`'
+    decision: 'Transform'
+    becomes: '`PreflightRejected`'
+    test_id: 'stack-orchestrator-consumes-socket-bridge--socket-bridgeinvalid'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Socket Bridge'
+    consumed: 'socket `BridgeStartFailed`'
+    decision: 'Transform'
+    becomes: '`DependencyStartFailed`'
+    test_id: 'stack-orchestrator-consumes-socket-bridge--socket-bridgestartfailed'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Socket Bridge'
+    consumed: 'socket `BridgeHealthFailed`'
+    decision: 'Transform'
+    becomes: '`ReadinessFailed`'
+    test_id: 'stack-orchestrator-consumes-socket-bridge--socket-bridgehealthfailed'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Socket Bridge'
+    consumed: 'socket `BridgeStopFailed`'
+    decision: 'Transform'
+    becomes: '`CleanupFailed`'
+    test_id: 'stack-orchestrator-consumes-socket-bridge--socket-bridgestopfailed'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Socket Bridge'
+    consumed: 'socket `Critical`'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical` with origin chain'
+    test_id: 'stack-orchestrator-consumes-socket-bridge--socket-critical'
+    implementation: planned
+  - section: 'Stack Orchestrator Consumes Socket Bridge'
+    consumed: 'unknown'
+    decision: 'Transform'
+    becomes: 'orchestrator `Critical`'
+    test_id: 'stack-orchestrator-consumes-socket-bridge--unknown'
+    implementation: planned

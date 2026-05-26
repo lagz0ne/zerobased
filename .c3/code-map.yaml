@@ -1,0 +1,5 @@
+c3-109:
+  - docs/superpowers/specs/2026-05-26-compose-backed-orchestration-design.md
+  - internal/composebackend/**
+  - internal/up/runner.go
+  - internal/up/runner_test.go

@@ -1,7 +1,7 @@
 {
   "name": "zerobased",
   "version": "0.0.1",
-  "description": "Zero-config Docker service router — auto-detects containers, creates Unix sockets + HTTP routes",
+  "description": "Rewrite in progress: explicit local control plane for development stacks",
   "bin": {
     "zerobased": "bin/zerobased"
   },
@@ -19,5 +19,5 @@
     "type": "git",
     "url": "https://github.com/lagz0ne/zerobased"
   },
-  "keywords": ["docker", "devtools", "unix-socket", "zero-config", "caddy", "reverse-proxy"]
+  "keywords": ["devtools", "control-plane", "routing", "tdd"]
 }

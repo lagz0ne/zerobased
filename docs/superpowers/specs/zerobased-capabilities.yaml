@@ -1,0 +1,90 @@
+version: 1
+schema: zerobased-capabilities
+owner:
+  c3_component: c3-101
+  rfc: docs/superpowers/specs/2026-05-13-zerobased-traced-tdd-rfc.md
+
+capabilities:
+  - id: command-surface
+    allowed_packages: []
+    allowed_imports: []
+    forbidden_imports: []
+    forbidden_symbols:
+      - zerobased run
+      - 'Use: "run"'
+      - "Use: 'run'"
+      - 'case "run":'
+      - "case 'run':"
+    allowed_by_rfc: explicit rewrite surface is start/up only
+
+  - id: no-docker-autodiscovery
+    allowed_packages: []
+    allowed_imports: []
+    forbidden_imports:
+      - internal/docker/**
+    forbidden_symbols:
+      - ContainerList
+      - ContainerInspect
+      - Events
+    allowed_by_rfc: Docker event watching is outside the target graph
+
+  - id: no-routefile
+    allowed_packages: []
+    allowed_imports: []
+    forbidden_imports:
+      - internal/routes/**
+    forbidden_symbols:
+      - zerobased.routes
+      - routefile
+    allowed_by_rfc: routefile-driven routing is outside this RFC
+
+  - id: no-classifier-env-discovery
+    allowed_packages: []
+    allowed_imports: []
+    forbidden_imports:
+      - internal/classifier/**
+      - internal/env/**
+    forbidden_symbols:
+      - auto-classify
+      - env discovery
+    allowed_by_rfc: classifier/env discovery is legacy behavior
+
+  - id: daemon-owns-route-runtime
+    allowed_packages:
+      - internal/route_runtime/**
+      - internal/controlplane/**
+      - internal/daemon/**
+    allowed_imports:
+      - internal/route_runtime/**
+    forbidden_imports: []
+    forbidden_symbols:
+      - AddHTTPRoute
+      - AddTCPRoute
+      - ApplyRouteConfig
+      - CaddyAdminURL
+      - /config/apps/http/servers
+    allowed_by_rfc: only the daemon may mutate the route runtime
+
+  - id: repo-up-cannot-import-route-runtime
+    allowed_packages:
+      - internal/up/**
+      - internal/orchestrator/**
+    allowed_imports: []
+    forbidden_imports:
+      - internal/route_runtime/**
+    forbidden_symbols: []
+    allowed_by_rfc: repo-local up must publish desired state through the control-plane client
+
+  - id: compose-sdk-isolated
+    allowed_packages:
+      - internal/composebackend/**
+    allowed_imports:
+      - github.com/compose-spec/compose-go/**
+      - github.com/docker/cli/**
+      - github.com/docker/compose/**
+    forbidden_imports:
+      - github.com/compose-spec/compose-go/**
+      - github.com/docker/cli/**
+      - github.com/docker/compose/**
+    forbidden_symbols: []
+    allowed_by_rfc: Compose is a backend adapter; no package outside internal/composebackend may import Compose SDKs directly

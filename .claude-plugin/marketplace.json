@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "zerobased",
-  "description": "Zero-config Docker service router for Claude Code — auto-detect containers, get connection strings, share live previews",
+  "description": "Rewrite-state reference for zerobased's explicit local control plane",
   "owner": {
     "name": "lagz0ne",
     "url": "https://github.com/lagz0ne"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "zerobased",
-      "description": "Zero-config Docker service router — auto-detects containers, creates Unix sockets + HTTP routes, shares previews with remote reviewers via Tailscale or Cloudflare Tunnel",
+      "description": "Explicit local control-plane rewrite with traced-TDD failure ownership",
       "version": "1.0.0",
       "category": "development",
       "author": {
@@ -17,7 +17,7 @@
       },
       "source": "./",
       "homepage": "https://github.com/lagz0ne/zerobased",
-      "tags": ["docker", "service-discovery", "routing", "preview-sharing", "dev-tools", "caddy", "tailscale", "cloudflare"]
+      "tags": ["control-plane", "routing", "dev-tools", "tdd"]
     }
   ]
 }

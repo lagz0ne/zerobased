@@ -1,12 +1,12 @@
 {
   "name": "zerobased",
   "version": "1.0.0",
-  "description": "Zero-config Docker service router — auto-detects containers, creates Unix sockets + HTTP routes, shares previews with remote reviewers",
+  "description": "Rewrite-state reference for an explicit local control plane with traced-TDD failure ownership",
   "author": {
     "name": "lagz0ne",
     "url": "https://github.com/lagz0ne"
   },
   "repository": "https://github.com/lagz0ne/zerobased",
   "homepage": "https://github.com/lagz0ne/zerobased",
-  "keywords": ["docker", "service-discovery", "routing", "preview-sharing", "dev-tools"]
+  "keywords": ["control-plane", "dev-tools", "routing", "tdd"]
 }
