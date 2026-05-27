@@ -6,3 +6,4 @@
 - 2026-05-12: For framework dev servers that finish real initialization on first page render, prefer `ready.tcp` in example `zerobased.yaml` files unless the HTTP probe is intentionally cheap and stable.
 - 2026-05-13: For traced-TDD design, use dependency graphs over wall text and model target integration boundaries, not legacy package names that happen to exist today.
 - 2026-05-13: When the chosen direction is clean-slate rewrite, remove or quarantine stale executable paths and agent-facing docs before implementation so future work cannot continue the wrong product model by accident.
+- 2026-05-27: Keep CLI help and README user-facing. Contributor process terms like TDD, traced-TDD, rewrite notes, internal docs paths, and legacy migration framing belong in agent docs, not product help.

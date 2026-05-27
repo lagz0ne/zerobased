@@ -22,7 +22,7 @@ func main() {
 			fmt.Println(version)
 			return
 		case "help", "--help", "-h":
-			printRewriteNotice()
+			printHelp()
 			return
 		case "start":
 			runStart()
@@ -33,7 +33,7 @@ func main() {
 		}
 	}
 
-	printRewriteNotice()
+	printHelp()
 	os.Exit(1)
 }
 
@@ -96,40 +96,52 @@ func resolveHome() (string, error) {
 	return filepath.Join(userHome, ".zerobased"), nil
 }
 
-func printRewriteNotice() {
+func printHelp() {
 	fmt.Printf(`zerobased %s
 
-Rewrite in progress.
+Explicit local dev stack orchestration.
 
-The legacy Docker autodiscovery router has been removed from this working tree.
-The current explicit local control-plane contract is described in:
-  docs/superpowers/specs/2026-05-13-zerobased-control-plane-rfc.md
+Usage:
+  zerobased start      Start the machine-local control plane and route runtime.
+  zerobased up         Run the current project from explicit zerobased.yaml.
+  zerobased version    Print the zerobased version.
+  zerobased help       Show this help.
 
-First-class product boundaries for the rewrite:
-  zerobased start
-  zerobased up
-
-zerobased.yaml v1 starts with:
+zerobased.yaml v1:
   version: 1
   name: my-project
+  host: my-project.localhost
   compose:
     files:
       - compose.yaml
     services:
       - postgres
     ownership: owned
-  processes: ...
-  routes: ...
+  processes:
+    web:
+      command: ["go", "run", "./cmd/web"]
+      readiness:
+        type: file
+        path: .zerobased/web.ready
+  routes:
+    - path: /
+      process: web
+      port: 3000
 
-Compose is explicit: zerobased only loads files listed in zerobased.yaml.
-Owned Compose services get a zerobased-generated project name and dev.zerobased.* labels.
-Global Compose escape hatches like container_name, host ports, host networking,
-external resources, and custom resource names fail before containers start.
+How it works:
+  start runs once per machine and owns local routing on 127.0.0.1:80.
+  up starts only the Compose files and services declared in zerobased.yaml,
+  starts declared local processes, waits for readiness, publishes routes,
+  and stays foreground until Ctrl-C.
 
-Run start in one terminal, then run up from a project with zerobased.yaml.
-up stays foreground until stopped.
-Default Docker Caddy routing requires local processes to bind 0.0.0.0, not only 127.0.0.1.
-
-Implementation must follow traced-TDD failure ownership before behavior lands.
+Rules:
+  zerobased.yaml must start with version: 1.
+  Compose files are not discovered; list them under compose.files.
+  Every process must declare file readiness with type and path.
+  Owned Compose rejects container_name, host ports, host networking,
+  host namespace sharing, provider-managed services, external resources,
+  and custom resource names before containers start.
+  With the default Docker Caddy router, local web processes must listen on
+  0.0.0.0, not only 127.0.0.1.
 `, version)
 }

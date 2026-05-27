@@ -1,21 +1,28 @@
 # zerobased
 
-Rewrite in progress.
+Explicit local dev stack orchestration.
 
-The legacy Docker autodiscovery router has been removed from this working tree. This repo is now the starting point for the explicit machine-local control plane described in:
+`zerobased start` runs once per machine and owns the local control plane plus
+route runtime. `zerobased up` runs from a project directory, reads explicit
+`zerobased.yaml` v1, starts declared dependencies and processes, waits for
+readiness, publishes routes, and stays foreground until Ctrl-C.
 
-- `docs/superpowers/specs/2026-05-13-zerobased-control-plane-rfc.md`
+## Install
 
-Current implementation state:
+```bash
+bun i -g zerobased
+zerobased version
+```
 
-- `zerobased start` and `zerobased up` are the only first-class product boundaries for new work.
-- `zerobased up` reads explicit `zerobased.yaml` v1 from the project root.
-- The old Docker watcher, `zerobased run`, routefile parser, classifier-based exposure, and direct Caddy mutation paths are not the target architecture.
-- Runtime path: claim through the daemon, start declared Compose dependencies when present, launch declared local processes, wait for readiness, publish routes through the daemon-owned route runtime, then stay foreground until stopped.
-- Compose is explicit. Zerobased loads only Compose files listed in `zerobased.yaml`; it does not infer `compose.yaml` from the directory.
-- Owned Compose services get a zerobased-generated Compose project name and `dev.zerobased.*` labels. `container_name`, host `ports`, `network_mode: host`, external resources, and custom top-level resource names are rejected before containers start.
+## Quick Start
 
-Minimal `zerobased.yaml` v1:
+Start the machine-local control plane in one terminal:
+
+```bash
+zerobased start
+```
+
+Create `zerobased.yaml` in the project root:
 
 ```yaml
 version: 1
@@ -32,25 +39,44 @@ processes:
     command: ["go", "run", "./cmd/web"]
     readiness:
       type: file
-      path: /tmp/my-project-ready
+      path: .zerobased/web.ready
 routes:
   - path: /
     process: web
     port: 3000
 ```
 
-Run it:
+Run the project:
 
 ```bash
-zerobased start
 zerobased up
 ```
 
-`up` is foreground. Stop it with Ctrl-C; zerobased owns orchestration, not detached babysitting.
+Open `http://my-project.localhost`.
 
-Local processes published through the default Docker Caddy route runtime must listen on an address reachable from Docker, normally `0.0.0.0`. A process bound only to `127.0.0.1` cannot be reached from the Caddy container.
+## Config
 
-Compose example:
+`zerobased.yaml` must start with `version: 1`.
+
+Use `compose.files` to list the Compose files zerobased may load. Compose files
+are not discovered automatically. Use `compose.services` and `compose.profiles`
+to select the declared dependency slice for this project.
+
+In `owned` Compose mode, zerobased generates the Compose project identity and
+adds `dev.zerobased.*` labels. It rejects `container_name`, host `ports`,
+host networking, host PID/IPC/cgroup namespace sharing, provider-managed
+services, external resources, and custom top-level resource names before
+containers start.
+
+Declare local processes under `processes`. Every process must declare file
+readiness with `type: file` and `path`. Declare HTTP routes under `routes`,
+pointing each route to a process and port.
+
+Local processes published through the default Docker Caddy route runtime must
+listen on an address reachable from Docker, normally `0.0.0.0`. A process bound
+only to `127.0.0.1` cannot be reached from the Caddy container.
+
+## Acountee-Style Example
 
 ```yaml
 version: 1
@@ -72,25 +98,29 @@ processes:
     command: ["bun", "run", "dev"]
     readiness:
       type: file
-      path: /tmp/acountee-web-ready
+      path: .zerobased/web.ready
 routes:
   - path: /
     process: web
     port: 3000
 ```
 
-Keep Compose ports internal. Publish through zerobased routes/listeners, not Compose host port binds.
+Keep Compose ports internal. Publish through zerobased routes/listeners, not
+Compose host port binds.
 
-Development rule:
+## Commands
 
-- No behavior should be added without RED-GREEN-TDD.
-- Tests must follow traced-TDD: each failure belongs to one declared layer contract, and upper layers test only their own transformed or propagated outcomes.
-- Repo-local `up` must publish to the daemon-owned control plane. It must not mutate Caddy directly.
+```bash
+zerobased start      # start the machine-local control plane
+zerobased up         # run the current project from zerobased.yaml
+zerobased version    # print the installed version
+zerobased help       # show CLI help
+```
 
-Useful commands:
+## From Source
 
 ```bash
 go test ./...
-go test -tags system ./internal/systemtest
 make build
+./bin/zerobased help
 ```

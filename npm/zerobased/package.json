@@ -1,7 +1,7 @@
 {
   "name": "zerobased",
-  "version": "0.0.1",
-  "description": "Rewrite in progress: explicit local control plane for development stacks",
+  "version": "0.8.1",
+  "description": "Explicit local dev stack orchestration",
   "bin": {
     "zerobased": "bin/zerobased"
   },
@@ -14,15 +14,15 @@
     "postinstall": "node install.js"
   },
   "optionalDependencies": {
-    "@lagz0ne/zerobased-linux-x64": "0.0.1",
-    "@lagz0ne/zerobased-linux-arm64": "0.0.1",
-    "@lagz0ne/zerobased-darwin-arm64": "0.0.1",
-    "@lagz0ne/zerobased-darwin-x64": "0.0.1"
+    "@lagz0ne/zerobased-linux-x64": "0.8.1",
+    "@lagz0ne/zerobased-linux-arm64": "0.8.1",
+    "@lagz0ne/zerobased-darwin-arm64": "0.8.1",
+    "@lagz0ne/zerobased-darwin-x64": "0.8.1"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/lagz0ne/zerobased"
   },
-  "keywords": ["devtools", "control-plane", "routing", "tdd"]
+  "keywords": ["devtools", "control-plane", "routing", "orchestration"]
 }
