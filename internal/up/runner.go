@@ -128,7 +128,8 @@ func Run(ctx context.Context, options Options) (err error) {
 		ClaimToken: receipt.Token,
 		Generation: receipt.Generation,
 	}
-	defer func() {
+	published := false
+	releaseClaim := func() {
 		cleanupTimeout := cleanupTimeoutOrDefault(options.CleanupTimeout)
 		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancelRelease()
@@ -138,6 +139,11 @@ func Run(ctx context.Context, options Options) (err error) {
 				releaseErr = fmt.Errorf("%w; primary error: %v", releaseErr, err)
 			}
 			err = zberr.New(zberr.LayerStackOrchestrator, zberr.CodeCleanupFailed, zberr.WithCause(releaseErr))
+		}
+	}
+	defer func() {
+		if !published {
+			releaseClaim()
 		}
 	}()
 
@@ -168,12 +174,15 @@ func Run(ctx context.Context, options Options) (err error) {
 
 	processes, err := startProcesses(processCtx, projectDir, cfg.Processes)
 	if err != nil {
+		stopProcesses()
 		if ctx.Err() != nil {
 			return nil
 		}
 		return err
 	}
-	defer cleanupProcesses(stopProcesses, processes)
+	defer func() {
+		cleanupProcesses(stopProcesses, processes)
+	}()
 
 	timeout := options.ReadinessTimeout
 	timeout = readinessTimeoutOrDefault(timeout)
@@ -199,6 +208,8 @@ func Run(ctx context.Context, options Options) (err error) {
 	if err := options.ControlPlane.Publish(ctx, publication); err != nil {
 		return zberr.New(zberr.LayerStackOrchestrator, zberr.CodeGenerationCommitFailed, zberr.WithCause(err))
 	}
+	published = true
+	defer releaseClaim()
 
 	return waitForeground(ctx, processes)
 }

@@ -118,6 +118,97 @@ routes:
 	}
 }
 
+func TestDefaultDockerCaddyRouteRuntimePublishesAndCleansUp(t *testing.T) {
+	requireDocker(t)
+	requirePortAvailable(t, "127.0.0.1:80")
+	requireNoContainer(t, "zerobased-route-runtime-caddy")
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "-f", "zerobased-route-runtime-caddy").Run()
+	})
+
+	bin := buildZerobased(t)
+	home := t.TempDir()
+	project := t.TempDir()
+	readyFile := filepath.Join(project, "ready.txt")
+	port := freeTCPPort(t)
+	host := "docker-runtime-systemtest.localhost"
+
+	daemon := startDaemon(t, home, bin, env{
+		"ZEROBASED_ROUTE_RUNTIME_BACKEND": "docker-caddy",
+	})
+	daemonStopped := false
+	defer func() {
+		if !daemonStopped {
+			daemon.stop(t)
+		}
+	}()
+
+	writeFile(t, filepath.Join(project, "server.go"), `package main
+
+import (
+	"net"
+	"net/http"
+	"os"
+)
+
+func main() {
+	readyPath := os.Args[1]
+	port := os.Args[2]
+	listener, err := net.Listen("tcp", "0.0.0.0:"+port)
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(readyPath, []byte("ready"), 0o644); err != nil {
+		panic(err)
+	}
+	if err := http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})); err != nil {
+		panic(err)
+	}
+}
+`)
+	writeFile(t, filepath.Join(project, "zerobased.yaml"), fmt.Sprintf(`version: 1
+name: docker-runtime-systemtest
+host: %s
+processes:
+  web:
+    command: ["go", "run", "server.go", "%s", "%d"]
+    readiness:
+      type: file
+      path: %s
+routes:
+  - path: /
+    process: web
+    port: %d
+`, host, readyFile, port, readyFile, port))
+
+	up := startProcess(t, home, project, bin, "up", nil)
+	t.Cleanup(func() {
+		up.interruptIfRunning(t)
+	})
+	waitForCondition(t, "default Docker Caddy route", up, func() bool {
+		request, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)
+		if err != nil {
+			return false
+		}
+		request.Host = host
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return false
+		}
+		_ = response.Body.Close()
+		return response.StatusCode == http.StatusNoContent
+	})
+	assertStillRunning(t, up)
+	time.Sleep(500 * time.Millisecond)
+	up.interrupt(t)
+
+	daemon.interrupt(t)
+	daemonStopped = true
+	waitForNoContainer(t, "zerobased-route-runtime-caddy")
+}
+
 type env map[string]string
 
 type commandResult struct {
@@ -219,6 +310,26 @@ func (process daemonProcess) interrupt(t *testing.T) {
 	}
 }
 
+func (process daemonProcess) interruptIfRunning(t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-process.done:
+		return
+	default:
+	}
+	if err := process.cmd.Process.Signal(os.Interrupt); err != nil {
+		_ = process.cmd.Process.Kill()
+		return
+	}
+	select {
+	case <-process.done:
+	case <-time.After(5 * time.Second):
+		_ = process.cmd.Process.Kill()
+		<-process.done
+	}
+}
+
 func assertStillRunning(t *testing.T, process daemonProcess) {
 	t.Helper()
 
@@ -277,7 +388,7 @@ func waitForExists(t *testing.T, path string, process daemonProcess) {
 func waitForCondition(t *testing.T, name string, process daemonProcess, ready func() bool) {
 	t.Helper()
 
-	for range 300 {
+	for range 1000 {
 		if ready() {
 			return
 		}
@@ -328,4 +439,46 @@ func freeTCPPort(t *testing.T) int {
 	defer listener.Close()
 
 	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func requireDocker(t *testing.T) {
+	t.Helper()
+
+	if output, err := exec.Command("docker", "version").CombinedOutput(); err != nil {
+		t.Skipf("docker unavailable: %v\n%s", err, output)
+	}
+}
+
+func requirePortAvailable(t *testing.T, address string) {
+	t.Helper()
+
+	conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		t.Skipf("%s already has a listener", address)
+	}
+}
+
+func requireNoContainer(t *testing.T, name string) {
+	t.Helper()
+
+	if containerExists(name) {
+		t.Skipf("container %s already exists", name)
+	}
+}
+
+func waitForNoContainer(t *testing.T, name string) {
+	t.Helper()
+
+	for range 100 {
+		if !containerExists(name) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("container %s still exists", name)
+}
+
+func containerExists(name string) bool {
+	return exec.Command("docker", "inspect", name).Run() == nil
 }

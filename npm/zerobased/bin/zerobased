@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+console.error("zerobased: native binary was not installed; run npm rebuild zerobased");
+process.exit(1);

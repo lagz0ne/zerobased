@@ -272,6 +272,62 @@ routes:
 	}
 }
 
+func TestRunReleasesPublishedRouteBeforeStoppingProcessAndCompose(t *testing.T) {
+	project := t.TempDir()
+	readyFile := filepath.Join(project, "ready.txt")
+	pidFile := filepath.Join(project, "process.pid")
+	termFile := filepath.Join(project, "process-stopped.txt")
+	composeStopFile := filepath.Join(project, "compose-stopped.txt")
+	ctx, cancel := context.WithCancel(context.Background())
+	plane := &recordingControlPlane{
+		readyFile:                  readyFile,
+		cancel:                     cancel,
+		releaseRejectsExistingFile: []string{termFile, composeStopFile},
+	}
+	backend := &recordingComposeBackend{stopFile: composeStopFile}
+
+	writeFile(t, filepath.Join(project, "compose.yaml"), `services:
+  postgres:
+    image: postgres:18
+`)
+	writeFile(t, filepath.Join(project, "zerobased.yaml"), fmt.Sprintf(`version: 1
+name: example
+compose:
+  files:
+    - compose.yaml
+  services:
+    - postgres
+  ownership: owned
+processes:
+  web:
+    command: ["sh", "-c", "trap 'printf stopped > %s; exit 0' TERM; printf $$ > %s; printf ready > %s; while true; do sleep 1; done"]
+    readiness:
+      type: file
+      path: %s
+routes:
+  - path: /
+    process: web
+    port: 3000
+`, termFile, pidFile, readyFile, readyFile))
+
+	err := Run(ctx, Options{
+		ProjectDir:       project,
+		ControlPlane:     plane,
+		ComposeBackend:   backend,
+		CleanupTimeout:   time.Second,
+		ReadinessTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if plane.releases != 1 {
+		t.Fatalf("release calls = %d, want 1", plane.releases)
+	}
+	if backend.stops != 1 {
+		t.Fatalf("compose stops = %d, want 1", backend.stops)
+	}
+}
+
 func TestRunPassesCleanupTimeoutToComposeRollback(t *testing.T) {
 	project := t.TempDir()
 	backend := &recordingComposeBackend{
@@ -520,6 +576,82 @@ routes:
 	}
 }
 
+func TestRunStopsPublishedResourcesWhenReleaseFails(t *testing.T) {
+	project := t.TempDir()
+	readyFile := filepath.Join(project, "ready.txt")
+	pidFile := filepath.Join(project, "process.pid")
+	termFile := filepath.Join(project, "process-stopped.txt")
+	ctx, cancel := context.WithCancel(context.Background())
+	plane := &recordingControlPlane{
+		readyFile:    readyFile,
+		published:    make(chan struct{}),
+		releaseError: fmt.Errorf("unpublish failed"),
+	}
+	backend := &recordingComposeBackend{}
+
+	writeFile(t, filepath.Join(project, "compose.yaml"), `services:
+  postgres:
+    image: postgres:18
+`)
+	writeFile(t, filepath.Join(project, "zerobased.yaml"), fmt.Sprintf(`version: 1
+name: example
+compose:
+  files:
+    - compose.yaml
+  services:
+    - postgres
+  ownership: owned
+processes:
+  web:
+    command: ["sh", "-c", "trap 'printf stopped > %s; exit 0' TERM; printf $$ > %s; printf ready > %s; while true; do sleep 1; done"]
+    readiness:
+      type: file
+      path: %s
+routes:
+  - path: /
+    process: web
+    port: 3000
+`, termFile, pidFile, readyFile, readyFile))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{
+			ProjectDir:       project,
+			ControlPlane:     plane,
+			ComposeBackend:   backend,
+			CleanupTimeout:   time.Second,
+			ReadinessTimeout: time.Second,
+		})
+	}()
+
+	select {
+	case <-plane.published:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for publish")
+	}
+	pid := waitForPID(t, pidFile)
+	defer func() {
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
+	}()
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("Run returned nil error after release failure")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for Run")
+	}
+	if backend.stops != 1 {
+		t.Fatalf("compose stops = %d, want 1 when unpublish fails", backend.stops)
+	}
+	waitForProcessGroupExit(t, pid)
+	if _, err := os.Stat(termFile); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("stat process stop marker: %v", err)
+	}
+}
+
 func TestTerminateProcessesStopsProcessGroups(t *testing.T) {
 	project := t.TempDir()
 	pidFile := filepath.Join(project, "pid.txt")
@@ -707,20 +839,22 @@ routes:
 }
 
 type recordingControlPlane struct {
-	mu                  sync.Mutex
-	startFile           string
-	readyFile           string
-	claims              int
-	publishes           int
-	releases            int
-	claim               controlplane.Claim
-	publication         controlplane.Publication
-	release             controlplane.Release
-	cancel              context.CancelFunc
-	claimed             chan struct{}
-	published           chan struct{}
-	blockRelease        bool
-	releaseRequiresFile string
+	mu                         sync.Mutex
+	startFile                  string
+	readyFile                  string
+	claims                     int
+	publishes                  int
+	releases                   int
+	claim                      controlplane.Claim
+	publication                controlplane.Publication
+	release                    controlplane.Release
+	cancel                     context.CancelFunc
+	claimed                    chan struct{}
+	published                  chan struct{}
+	blockRelease               bool
+	releaseError               error
+	releaseRequiresFile        string
+	releaseRejectsExistingFile []string
 }
 
 func (plane *recordingControlPlane) Claim(ctx context.Context, claim controlplane.Claim) (controlplane.ClaimReceipt, error) {
@@ -772,9 +906,17 @@ func (plane *recordingControlPlane) Release(ctx context.Context, release control
 		<-ctx.Done()
 		return ctx.Err()
 	}
+	if plane.releaseError != nil {
+		return plane.releaseError
+	}
 	if plane.releaseRequiresFile != "" {
 		if _, err := os.Stat(plane.releaseRequiresFile); err != nil {
 			return fmt.Errorf("release before required file %s: %w", plane.releaseRequiresFile, err)
+		}
+	}
+	for _, path := range plane.releaseRejectsExistingFile {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("release after forbidden file %s exists", path)
 		}
 	}
 	return nil
@@ -882,6 +1024,18 @@ func waitForPID(t *testing.T, path string) int {
 		t.Fatalf("read pid from %s: %v content=%q", path, err, content)
 	}
 	return pid
+}
+
+func waitForProcessGroupExit(t *testing.T, pid int) {
+	t.Helper()
+
+	for range 100 {
+		if syscall.Kill(-pid, 0) != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("process group %d still alive", pid)
 }
 
 func waitUntil(t *testing.T, ready func() bool) {

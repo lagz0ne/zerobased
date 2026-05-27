@@ -38,4 +38,4 @@ npm: cross
 	@cp dist/$(BINARY)-darwin-arm64 npm/darwin-arm64/$(BINARY)
 	@cp dist/$(BINARY)-darwin-amd64 npm/darwin-x64/$(BINARY)
 	@cp README.md npm/zerobased/README.md
-	@echo "done — run 'npm publish' in each npm/ subdirectory"
+	@echo "done - npm packages staged locally; publishing is tag-driven by .github/workflows/release.yml"

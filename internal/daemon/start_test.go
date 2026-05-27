@@ -36,6 +36,16 @@ func TestStartCreatesLockSocketAndHealth(t *testing.T) {
 	assertExists(t, filepath.Join(home, "health.json"))
 }
 
+func TestConfigFromEnvUsesDefaultRouteRuntime(t *testing.T) {
+	t.Setenv("ZEROBASED_ROUTE_RUNTIME_BACKEND", "")
+	t.Setenv("ZEROBASED_ROUTE_RUNTIME_ADMIN_URL", "")
+
+	config := ConfigFromEnv(t.TempDir())
+	if config.RouteRuntime == nil {
+		t.Fatalf("ConfigFromEnv RouteRuntime is nil, want default route runtime")
+	}
+}
+
 func TestStartRejectsSecondDaemonWhileLockHeld(t *testing.T) {
 	home := t.TempDir()
 

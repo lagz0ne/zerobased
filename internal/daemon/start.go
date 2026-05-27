@@ -26,6 +26,14 @@ type RouteRuntime interface {
 	Unpublish(context.Context, controlplane.Publication) error
 }
 
+type bootstrappingRouteRuntime interface {
+	Bootstrap(context.Context) error
+}
+
+type closingRouteRuntime interface {
+	Close(context.Context) error
+}
+
 type Config struct {
 	Home         string
 	RouteRuntime RouteRuntime
@@ -38,13 +46,16 @@ type StartResult struct {
 	listener   net.Listener
 	server     *http.Server
 	lockFile   *os.File
+	runtime    closingRouteRuntime
 }
 
 func ConfigFromEnv(home string) Config {
 	config := Config{Home: home}
 	if os.Getenv("ZEROBASED_ROUTE_RUNTIME_BACKEND") == "admin-url" {
 		config.RouteRuntime = route_runtime.AdminURL{URL: os.Getenv("ZEROBASED_ROUTE_RUNTIME_ADMIN_URL")}
+		return config
 	}
+	config.RouteRuntime = route_runtime.NewDockerCaddy(route_runtime.DockerCaddyOptions{Home: home})
 	return config
 }
 
@@ -77,6 +88,18 @@ func Start(config Config) (StartResult, error) {
 	if err := os.Remove(result.SocketPath); err != nil && !os.IsNotExist(err) {
 		_ = result.Close()
 		return StartResult{}, zberr.New(zberr.LayerDaemonIPC, zberr.CodeSocketBindFailed, zberr.WithCause(err))
+	}
+
+	if runtime, ok := config.RouteRuntime.(bootstrappingRouteRuntime); ok {
+		bootstrapCtx, cancelBootstrap := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancelBootstrap()
+		if err := runtime.Bootstrap(bootstrapCtx); err != nil {
+			_ = result.Close()
+			return StartResult{}, zberr.New(zberr.LayerControlPlane, zberr.CodeBootFailed, zberr.WithCause(err))
+		}
+	}
+	if runtime, ok := config.RouteRuntime.(closingRouteRuntime); ok {
+		result.runtime = runtime
 	}
 
 	listener, err := net.Listen("unix", result.SocketPath)
@@ -113,18 +136,28 @@ func Start(config Config) (StartResult, error) {
 }
 
 func (result StartResult) Close() error {
+	var closeErr error
 	if result.server != nil {
 		if err := result.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			closeErr = err
 		}
 	}
-	if result.listener == nil {
-		return closeLock(result.lockFile)
+	if result.listener != nil {
+		if err := result.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) && closeErr == nil {
+			closeErr = err
+		}
 	}
-	if err := result.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		return err
+	if result.runtime != nil {
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelClose()
+		if err := result.runtime.Close(closeCtx); err != nil && closeErr == nil {
+			closeErr = err
+		}
 	}
-	return closeLock(result.lockFile)
+	if err := closeLock(result.lockFile); err != nil && closeErr == nil {
+		closeErr = err
+	}
+	return closeErr
 }
 
 type apiServer struct {

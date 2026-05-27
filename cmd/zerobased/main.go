@@ -128,6 +128,7 @@ external resources, and custom resource names fail before containers start.
 
 Run start in one terminal, then run up from a project with zerobased.yaml.
 up stays foreground until stopped.
+Default Docker Caddy routing requires local processes to bind 0.0.0.0, not only 127.0.0.1.
 
 Implementation must follow traced-TDD failure ownership before behavior lands.
 `, version)

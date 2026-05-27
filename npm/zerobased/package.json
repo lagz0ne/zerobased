@@ -5,6 +5,11 @@
   "bin": {
     "zerobased": "bin/zerobased"
   },
+  "files": [
+    "bin/zerobased",
+    "install.js",
+    "README.md"
+  ],
   "scripts": {
     "postinstall": "node install.js"
   },

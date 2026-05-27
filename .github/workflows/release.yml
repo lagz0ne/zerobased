@@ -7,7 +7,19 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -tags system ./internal/systemtest -count=1
+
   build:
+    needs: verify
     strategy:
       matrix:
         include:
@@ -87,6 +99,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
 
           # Platform packages
@@ -104,6 +117,7 @@ jobs:
             chmod +x "$dir/zerobased"
             cd "$dir"
             npm version "$VERSION" --no-git-tag-version --allow-same-version
+            npm pack --dry-run
             npm publish --access public
             cd ../..
           done
@@ -120,4 +134,5 @@ jobs:
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm pack --dry-run
           npm publish --access public

@@ -48,6 +48,8 @@ zerobased up
 
 `up` is foreground. Stop it with Ctrl-C; zerobased owns orchestration, not detached babysitting.
 
+Local processes published through the default Docker Caddy route runtime must listen on an address reachable from Docker, normally `0.0.0.0`. A process bound only to `127.0.0.1` cannot be reached from the Caddy container.
+
 Compose example:
 
 ```yaml
