@@ -272,6 +272,97 @@ routes:
 	}
 }
 
+func TestRunPassesCleanupTimeoutToComposeRollback(t *testing.T) {
+	project := t.TempDir()
+	backend := &recordingComposeBackend{
+		err: zberr.New(zberr.LayerComposeBackend, zberr.CodeLifecycleFailed),
+	}
+
+	writeFile(t, filepath.Join(project, "compose.yaml"), `services:
+  postgres:
+    image: postgres:18
+`)
+	writeFile(t, filepath.Join(project, "zerobased.yaml"), `version: 1
+name: example
+compose:
+  files:
+    - compose.yaml
+  services:
+    - postgres
+  ownership: owned
+processes:
+  web:
+    command: ["sh", "-c", "sleep 10"]
+    readiness:
+      type: file
+      path: ready.txt
+routes:
+  - path: /
+    process: web
+    port: 3000
+`)
+
+	err := Run(context.Background(), Options{
+		ProjectDir:     project,
+		ControlPlane:   &recordingControlPlane{},
+		ComposeBackend: backend,
+		CleanupTimeout: 123 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("Run returned nil error")
+	}
+	if backend.request.RollbackTimeout != 123*time.Millisecond {
+		t.Fatalf("rollback timeout = %s, want cleanup timeout", backend.request.RollbackTimeout)
+	}
+}
+
+func TestRunDefaultCleanupTimeoutAllowsDockerComposeStop(t *testing.T) {
+	project := t.TempDir()
+	readyFile := filepath.Join(project, "ready.txt")
+	ctx, cancel := context.WithCancel(context.Background())
+	plane := &recordingControlPlane{
+		readyFile: readyFile,
+		cancel:    cancel,
+	}
+	backend := &recordingComposeBackend{}
+
+	writeFile(t, filepath.Join(project, "compose.yaml"), `services:
+  postgres:
+    image: postgres:18
+`)
+	writeFile(t, filepath.Join(project, "zerobased.yaml"), fmt.Sprintf(`version: 1
+name: example
+compose:
+  files:
+    - compose.yaml
+  services:
+    - postgres
+  ownership: owned
+processes:
+  web:
+    command: ["sh", "-c", "printf ready > %s; sleep 10"]
+    readiness:
+      type: file
+      path: %s
+routes:
+  - path: /
+    process: web
+    port: 3000
+`, readyFile, readyFile))
+
+	err := Run(ctx, Options{
+		ProjectDir:     project,
+		ControlPlane:   plane,
+		ComposeBackend: backend,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if backend.stopContextBudget < 10*time.Second {
+		t.Fatalf("compose stop cleanup budget = %s, want at least 10s", backend.stopContextBudget)
+	}
+}
+
 func TestRunDoesNotStartComposeWhenOnlyDefaultComposeFileExists(t *testing.T) {
 	project := t.TempDir()
 	readyFile := filepath.Join(project, "ready.txt")
@@ -443,6 +534,32 @@ func TestTerminateProcessesStopsProcessGroups(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("process %d still alive after partial start failure", pid)
+}
+
+func TestCleanupProcessesUsesProcessGroupSigtermBeforeCancelKill(t *testing.T) {
+	project := t.TempDir()
+	readyFile := filepath.Join(project, "ready.txt")
+	termFile := filepath.Join(project, "term.txt")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	processes, err := startProcesses(ctx, project, map[string]processConfig{
+		"web": {
+			Command: []string{"sh", "-c", fmt.Sprintf("trap 'printf term > %s; exit 0' TERM; printf ready > %s; while true; do sleep 1; done", termFile, readyFile)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start process: %v", err)
+	}
+	waitUntil(t, func() bool {
+		_, err := os.Stat(readyFile)
+		return err == nil
+	})
+
+	cleanupProcesses(cancel, processes)
+
+	if _, err := os.Stat(termFile); err != nil {
+		t.Fatalf("process did not observe SIGTERM before cleanup cancellation: %v", err)
+	}
 }
 
 func TestRunCancelsDuringReadinessWithoutPublishing(t *testing.T) {
@@ -660,12 +777,14 @@ type recordingComposeBackend struct {
 	request             composebackend.Request
 	startFile           string
 	stopFile            string
+	stopContextBudget   time.Duration
 	processStartFile    string
 	requireClaimedPlane *recordingControlPlane
 	err                 error
 }
 
 func (backend *recordingComposeBackend) Start(ctx context.Context, request composebackend.Request) (composebackend.RunningStack, error) {
+	backend.request = request
 	if backend.err != nil {
 		return nil, backend.err
 	}
@@ -678,7 +797,6 @@ func (backend *recordingComposeBackend) Start(ctx context.Context, request compo
 		}
 	}
 	backend.starts++
-	backend.request = request
 	if backend.startFile != "" {
 		if err := os.WriteFile(backend.startFile, []byte("started"), 0o644); err != nil {
 			return nil, err
@@ -693,6 +811,9 @@ type recordingComposeStack struct {
 
 func (stack *recordingComposeStack) Stop(ctx context.Context) error {
 	stack.backend.stops++
+	if deadline, ok := ctx.Deadline(); ok {
+		stack.backend.stopContextBudget = time.Until(deadline)
+	}
 	if stack.backend.stopFile != "" {
 		return os.WriteFile(stack.backend.stopFile, []byte("stopped"), 0o644)
 	}

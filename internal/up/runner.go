@@ -78,6 +78,8 @@ type runningProcess struct {
 	done chan error
 }
 
+const defaultCleanupTimeout = 30 * time.Second
+
 func Run(ctx context.Context, options Options) (err error) {
 	if options.ControlPlane == nil {
 		return configInvalid("control plane client is required")
@@ -124,10 +126,7 @@ func Run(ctx context.Context, options Options) (err error) {
 		Generation: receipt.Generation,
 	}
 	defer func() {
-		cleanupTimeout := options.CleanupTimeout
-		if cleanupTimeout == 0 {
-			cleanupTimeout = 2 * time.Second
-		}
+		cleanupTimeout := cleanupTimeoutOrDefault(options.CleanupTimeout)
 		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancelRelease()
 
@@ -145,15 +144,12 @@ func Run(ctx context.Context, options Options) (err error) {
 		if backend == nil {
 			backend = composebackend.Backend{}
 		}
-		composeStack, err = backend.Start(ctx, composeRequest(projectDir, cfg, sessionID))
+		composeStack, err = backend.Start(ctx, composeRequest(projectDir, cfg, sessionID, cleanupTimeoutOrDefault(options.CleanupTimeout)))
 		if err != nil {
 			return mapComposeStartError(err)
 		}
 		defer func() {
-			cleanupTimeout := options.CleanupTimeout
-			if cleanupTimeout == 0 {
-				cleanupTimeout = 2 * time.Second
-			}
+			cleanupTimeout := cleanupTimeoutOrDefault(options.CleanupTimeout)
 			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), cleanupTimeout)
 			defer cancelCleanup()
 			if cleanupErr := composeStack.Stop(cleanupCtx); cleanupErr != nil {
@@ -307,7 +303,7 @@ func firstConfigKeyIsVersion(content string) bool {
 	return false
 }
 
-func startProcesses(ctx context.Context, projectDir string, processes map[string]processConfig) ([]runningProcess, error) {
+func startProcesses(_ context.Context, projectDir string, processes map[string]processConfig) ([]runningProcess, error) {
 	names := make([]string, 0, len(processes))
 	for name := range processes {
 		names = append(names, name)
@@ -317,7 +313,7 @@ func startProcesses(ctx context.Context, projectDir string, processes map[string
 	running := make([]runningProcess, 0, len(names))
 	for _, name := range names {
 		process := processes[name]
-		cmd := exec.CommandContext(ctx, process.Command[0], process.Command[1:]...)
+		cmd := exec.Command(process.Command[0], process.Command[1:]...)
 		cmd.Dir = projectDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -339,8 +335,8 @@ func startProcesses(ctx context.Context, projectDir string, processes map[string
 }
 
 func cleanupProcesses(cancel context.CancelFunc, processes []runningProcess) {
-	cancel()
 	terminateProcesses(processes)
+	cancel()
 }
 
 func terminateProcesses(processes []runningProcess) {
@@ -443,7 +439,14 @@ func (config composeConfig) enabled() bool {
 	return len(config.Files) > 0 || len(config.Profiles) > 0 || len(config.Services) > 0 || config.Ownership != ""
 }
 
-func composeRequest(projectDir string, cfg configFile, sessionID string) composebackend.Request {
+func cleanupTimeoutOrDefault(timeout time.Duration) time.Duration {
+	if timeout == 0 {
+		return defaultCleanupTimeout
+	}
+	return timeout
+}
+
+func composeRequest(projectDir string, cfg configFile, sessionID string, rollbackTimeout time.Duration) composebackend.Request {
 	return composebackend.Request{
 		ProjectDir:      projectDir,
 		StackName:       cfg.Name,
@@ -453,6 +456,7 @@ func composeRequest(projectDir string, cfg configFile, sessionID string) compose
 		ComposeProfiles: append([]string(nil), cfg.Compose.Profiles...),
 		Services:        append([]string(nil), cfg.Compose.Services...),
 		Ownership:       composebackend.Ownership(cfg.Compose.Ownership),
+		RollbackTimeout: rollbackTimeout,
 	}
 }
 

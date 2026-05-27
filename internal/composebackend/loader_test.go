@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	composeapi "github.com/docker/compose/v5/pkg/api"
 
 	"github.com/lagz0ne/zerobased/internal/zberr"
 )
@@ -81,6 +84,45 @@ services:
 	for key := range service.Labels {
 		if strings.HasPrefix(key, "com.docker.compose.") {
 			t.Fatalf("zerobased wrote reserved compose label %q", key)
+		}
+	}
+}
+
+func TestLoadAddsComposeSDKCustomLabels(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, "compose.yaml"), `services:
+  postgres:
+    image: postgres:18
+`)
+
+	loaded, err := Load(context.Background(), Request{
+		ProjectDir: project,
+		StackName:  "example",
+		Profile:    "backend",
+		Files:      []string{"compose.yaml"},
+		Services:   []string{"postgres"},
+		Ownership:  OwnershipOwned,
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	service, err := loaded.Project.GetService("postgres")
+	if err != nil {
+		t.Fatalf("get postgres service: %v", err)
+	}
+
+	wantName := ProjectName("example", "backend", project)
+	wantCustomLabels := map[string]string{
+		composeapi.ProjectLabel:     wantName,
+		composeapi.ServiceLabel:     "postgres",
+		composeapi.VersionLabel:     composeapi.ComposeVersion,
+		composeapi.WorkingDirLabel:  project,
+		composeapi.ConfigFilesLabel: filepath.Join(project, "compose.yaml"),
+		composeapi.OneoffLabel:      "False",
+	}
+	for key, want := range wantCustomLabels {
+		if got := service.CustomLabels[key]; got != want {
+			t.Fatalf("custom label %s = %q, want %q", key, got, want)
 		}
 	}
 }
@@ -345,6 +387,45 @@ func TestBackendRollsBackWhenComposeUpFails(t *testing.T) {
 	}
 }
 
+func TestBackendRollsBackWithBoundedContextWhenComposeUpFails(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, "compose.yaml"), `services:
+  postgres:
+    image: postgres:18
+`)
+	lifecycle := &recordingLifecycle{
+		upErr:                 fmt.Errorf("partial create failed"),
+		blockDownUntilContext: true,
+	}
+	backend := Backend{lifecycle: lifecycle}
+
+	done := make(chan error, 1)
+	go func() {
+		request := ownedRequest(project)
+		request.RollbackTimeout = 20 * time.Millisecond
+		_, err := backend.Start(context.Background(), request)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("Start returned nil error")
+		}
+		if !zberr.Is(err, zberr.LayerComposeBackend, zberr.CodeLifecycleFailed) {
+			t.Fatalf("error = %v, want compose backend LifecycleFailed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Start did not return after rollback timeout")
+	}
+	if lifecycle.downs != 1 {
+		t.Fatalf("down calls = %d, want 1 rollback", lifecycle.downs)
+	}
+	if lifecycle.downContextBudget <= 0 || lifecycle.downContextBudget > time.Second {
+		t.Fatalf("down context budget = %s, want bounded rollback context", lifecycle.downContextBudget)
+	}
+}
+
 func ownedRequest(project string) Request {
 	return Request{
 		ProjectDir: project,
@@ -356,12 +437,14 @@ func ownedRequest(project string) Request {
 }
 
 type recordingLifecycle struct {
-	ups         int
-	downs       int
-	upProject   *Project
-	downProject *Project
-	upErr       error
-	downErr     error
+	ups                   int
+	downs                 int
+	upProject             *Project
+	downProject           *Project
+	upErr                 error
+	downErr               error
+	blockDownUntilContext bool
+	downContextBudget     time.Duration
 }
 
 func (lifecycle *recordingLifecycle) Up(ctx context.Context, project *Project) error {
@@ -373,6 +456,13 @@ func (lifecycle *recordingLifecycle) Up(ctx context.Context, project *Project) e
 func (lifecycle *recordingLifecycle) Down(ctx context.Context, project *Project) error {
 	lifecycle.downs++
 	lifecycle.downProject = project
+	if deadline, ok := ctx.Deadline(); ok {
+		lifecycle.downContextBudget = time.Until(deadline)
+	}
+	if lifecycle.blockDownUntilContext {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return lifecycle.downErr
 }
 

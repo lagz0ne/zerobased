@@ -10,9 +10,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	composecli "github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/types"
+	composeapi "github.com/docker/compose/v5/pkg/api"
 	"gopkg.in/yaml.v3"
 
 	"github.com/lagz0ne/zerobased/internal/zberr"
@@ -35,6 +37,7 @@ type Request struct {
 	ComposeProfiles []string
 	Services        []string
 	Ownership       Ownership
+	RollbackTimeout time.Duration
 }
 
 type EffectiveProject struct {
@@ -57,6 +60,8 @@ type Backend struct {
 	lifecycle Lifecycle
 }
 
+const defaultRollbackTimeout = 30 * time.Second
+
 func NewBackend(lifecycle Lifecycle) Backend {
 	return Backend{lifecycle: lifecycle}
 }
@@ -71,7 +76,15 @@ func (backend Backend) Start(ctx context.Context, request Request) (RunningStack
 		return nil, lifecycleFailed(err.Error())
 	}
 	if err := lifecycle.Up(ctx, loaded.Project); err != nil {
-		_ = lifecycle.Down(context.Background(), loaded.Project)
+		rollbackTimeout := request.RollbackTimeout
+		if rollbackTimeout == 0 {
+			rollbackTimeout = defaultRollbackTimeout
+		}
+		rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), rollbackTimeout)
+		defer cancelRollback()
+		if rollbackErr := lifecycle.Down(rollbackCtx, loaded.Project); rollbackErr != nil {
+			return nil, lifecycleFailed(fmt.Sprintf("%s; rollback failed: %v", err, rollbackErr))
+		}
 		return nil, lifecycleFailed(err.Error())
 	}
 	return loadedStack{project: loaded.Project, lifecycle: lifecycle}, nil
@@ -372,10 +385,18 @@ func validateIsolation(project *types.Project, policies rawComposePolicies, owne
 }
 
 func injectLabels(project *types.Project, request Request, projectDir string, projectName string) (*types.Project, error) {
-	return project.WithServicesTransform(func(_ string, service types.ServiceConfig) (types.ServiceConfig, error) {
+	configFiles := strings.Join(project.ComposeFiles, ",")
+	return project.WithServicesTransform(func(name string, service types.ServiceConfig) (types.ServiceConfig, error) {
 		if service.Labels == nil {
 			service.Labels = types.Labels{}
 		}
+		service.CustomLabels = service.CustomLabels.
+			Add(composeapi.ProjectLabel, projectName).
+			Add(composeapi.ServiceLabel, name).
+			Add(composeapi.VersionLabel, composeapi.ComposeVersion).
+			Add(composeapi.WorkingDirLabel, projectDir).
+			Add(composeapi.ConfigFilesLabel, configFiles).
+			Add(composeapi.OneoffLabel, "False")
 		labels := map[string]string{
 			"dev.zerobased.project":         projectName,
 			"dev.zerobased.stack":           request.StackName,
