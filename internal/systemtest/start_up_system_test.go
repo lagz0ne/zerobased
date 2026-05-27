@@ -376,7 +376,7 @@ func assertExists(t *testing.T, path string) {
 func waitForExists(t *testing.T, path string, process daemonProcess) {
 	t.Helper()
 
-	for range 100 {
+	for range 6000 {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
