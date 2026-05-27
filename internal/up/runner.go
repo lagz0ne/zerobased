@@ -78,7 +78,10 @@ type runningProcess struct {
 	done chan error
 }
 
-const defaultCleanupTimeout = 30 * time.Second
+const (
+	defaultCleanupTimeout   = 30 * time.Second
+	defaultReadinessTimeout = 60 * time.Second
+)
 
 func Run(ctx context.Context, options Options) (err error) {
 	if options.ControlPlane == nil {
@@ -173,9 +176,7 @@ func Run(ctx context.Context, options Options) (err error) {
 	defer cleanupProcesses(stopProcesses, processes)
 
 	timeout := options.ReadinessTimeout
-	if timeout == 0 {
-		timeout = 10 * time.Second
-	}
+	timeout = readinessTimeoutOrDefault(timeout)
 	if err := waitForReadiness(ctx, cfg.Processes, processes, timeout); err != nil {
 		if ctx.Err() != nil {
 			return nil
@@ -442,6 +443,13 @@ func (config composeConfig) enabled() bool {
 func cleanupTimeoutOrDefault(timeout time.Duration) time.Duration {
 	if timeout == 0 {
 		return defaultCleanupTimeout
+	}
+	return timeout
+}
+
+func readinessTimeoutOrDefault(timeout time.Duration) time.Duration {
+	if timeout == 0 {
+		return defaultReadinessTimeout
 	}
 	return timeout
 }

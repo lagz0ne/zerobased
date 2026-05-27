@@ -316,6 +316,15 @@ routes:
 	}
 }
 
+func TestDefaultReadinessTimeoutAllowsRealDevServerStartup(t *testing.T) {
+	if got := readinessTimeoutOrDefault(0); got < 30*time.Second {
+		t.Fatalf("default readiness timeout = %s, want at least 30s", got)
+	}
+	if got := readinessTimeoutOrDefault(123 * time.Millisecond); got != 123*time.Millisecond {
+		t.Fatalf("explicit readiness timeout = %s, want caller override", got)
+	}
+}
+
 func TestRunDefaultCleanupTimeoutAllowsDockerComposeStop(t *testing.T) {
 	project := t.TempDir()
 	readyFile := filepath.Join(project, "ready.txt")
